@@ -10,7 +10,7 @@
 - 请求事件明细：查看成功 / 失败、来源、认证索引和 Token 消耗
 
 ## 效果图预览
-
+<img width="1849" height="891" alt="图片" src="https://github.com/user-attachments/assets/98dd8327-bc6d-4659-8b88-02456ea2593c" />
 <img width="1845" height="880" alt="图片" src="https://github.com/user-attachments/assets/ceb21ccd-c607-416f-8db7-1b9f309228ea" />
 <img width="1839" height="877" alt="图片" src="https://github.com/user-attachments/assets/691ccaaa-2269-4daf-9e98-7bc0acefeb3b" />
 <img width="1825" height="885" alt="图片" src="https://github.com/user-attachments/assets/8e986e97-1bdf-42bf-a4ab-bbf56dd834aa" />
