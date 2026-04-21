@@ -3,7 +3,7 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
 const require = createRequire(import.meta.url);
-const { readConfig, clientConfig, writeManagementConfig } = require("./server/config");
+const { readConfig, clientConfig, writeManagementConfig, writeIntegrationConfig } = require("./server/config");
 
 function readRequestBody(req) {
   return new Promise(function (resolve, reject) {
@@ -62,6 +62,33 @@ function localAppConfigPlugin() {
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json; charset=utf-8");
           res.end(JSON.stringify({ error: error && error.message ? error.message : "保存默认配置失败" }));
+        }
+      });
+
+      // 集成配置在开发模式下也需要单独保存入口，否则前端会因为接口缺失而提示保存失败。
+      server.middlewares.use("/api/integrations-config", async function (req, res, next) {
+        if (req.method !== "PATCH") {
+          next();
+          return;
+        }
+
+        try {
+          const body = await readRequestBody(req);
+          const input = body && body.integrations;
+
+          if (!input || typeof input !== "object" || Array.isArray(input)) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ error: "integrations 配置格式不正确" }));
+            return;
+          }
+
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify(clientConfig(writeIntegrationConfig(input))));
+        } catch (error) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ error: error && error.message ? error.message : "保存集成配置失败" }));
         }
       });
     }

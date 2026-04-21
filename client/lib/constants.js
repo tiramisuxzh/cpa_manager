@@ -1,6 +1,7 @@
 // 统一收口前端本地存储 key 和额度窗口常量，避免 Vue 侧继续依赖旧 src 目录。
 export const STORE = "cliproxyapi-codex-real-board";
 export const SNAPSHOT_STORE = "cliproxyapi-codex-real-board-snapshot";
+export const INTEGRATION_STORE = "cliproxyapi-codex-real-board-integrations";
 export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 export const FIVE_HOUR = 18000;
 export const WEEK = 604800;
@@ -50,6 +51,7 @@ export const PENDING_GROUPS = {
     "service-flags",
     "service-proxy",
     "service-retry",
-    "save-default-settings"
+    "save-default-settings",
+    "save-integration-settings"
   ]
 };

@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
-const { readConfig, clientConfig, serverConfig, writeManagementConfig } = require("./config");
+const { readConfig, clientConfig, serverConfig, writeManagementConfig, writeIntegrationConfig } = require("./config");
 
 const APP_CONFIG = readConfig();
 const SERVER_OPTIONS = serverConfig(APP_CONFIG);
@@ -113,6 +113,23 @@ app.patch("/api/app-config", requireTrustedRequest, (req, res) => {
     res.json(clientConfig(updated));
   } catch (error) {
     res.status(500).json({ error: error && error.message ? error.message : "保存默认配置失败" });
+  }
+});
+
+app.patch("/api/integrations-config", requireTrustedRequest, (req, res) => {
+  const input = req.body && req.body.integrations;
+
+  // 集成配置单独保存，要求请求体显式携带 integrations 对象，避免错误结构写脏配置文件。
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    res.status(400).json({ error: "integrations 配置格式不正确" });
+    return;
+  }
+
+  try {
+    const updated = writeIntegrationConfig(input);
+    res.json(clientConfig(updated));
+  } catch (error) {
+    res.status(500).json({ error: error && error.message ? error.message : "保存集成配置失败" });
   }
 });
 

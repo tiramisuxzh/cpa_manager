@@ -3,8 +3,10 @@ import { computed, onMounted, ref } from "vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
 import DisabledPoolView from "./components/DisabledPoolView.vue";
 import ExceptionCenterView from "./components/ExceptionCenterView.vue";
+import ExternalIntegrationView from "./components/ExternalIntegrationView.vue";
 import FileDetailDrawer from "./components/FileDetailDrawer.vue";
 import FilePoolView from "./components/FilePoolView.vue";
+import IntegrationSettingsView from "./components/IntegrationSettingsView.vue";
 import QuotaPoolView from "./components/QuotaPoolView.vue";
 import RequestEventsView from "./components/RequestEventsView.vue";
 import SettingsView from "./components/SettingsView.vue";
@@ -17,6 +19,7 @@ var activeRoute = ref("files");
 var collapsedSections = ref({
   "file-management": false,
   usage: true,
+  "external-integrations": true,
   settings: true
 });
 
@@ -34,15 +37,24 @@ var SECTION_DEFINITIONS = [
     desc: "围绕请求事件、消耗明细与结果追踪的分析区。"
   },
   {
+    id: "external-integrations",
+    kicker: "Integrate",
+    title: "外部集成",
+    desc: "把外部系统页面按配置地址嵌入到当前管理台。"
+  },
+  {
     id: "settings",
     kicker: "System",
     title: "系统设置",
-    desc: "连接、阈值与管理台本地行为配置。"
+    desc: "连接、阈值与外部集成地址等系统级配置。"
   }
 ];
 
 var connectionReady = computed(function () {
   return !!String(consoleApp.settings.baseUrl || "").trim() && !!String(consoleApp.settings.key || "").trim();
+});
+var wenfxlIntegrationReady = computed(function () {
+  return !!String(consoleApp.integrationSettings.wenfxlOpenaiUrl || "").trim();
 });
 
 var analytics = computed(function () {
@@ -131,6 +143,32 @@ var routeItems = computed(function () {
       meta: connectionReady.value ? "已配置" : "待配置",
       showRefreshFiles: false,
       showRescan: false
+    },
+    {
+      id: "integration-settings",
+      sectionId: "settings",
+      sectionTitle: "系统设置",
+      eyebrow: "System Settings",
+      kicker: "INTEGRATION",
+      title: "集成配置",
+      desc: "配置外部集成页面的访问地址",
+      pageDesc: "在这里维护外部集成的访问地址，供左侧“外部集成”菜单直接嵌入使用。",
+      meta: wenfxlIntegrationReady.value ? "已配置" : "待配置",
+      showRefreshFiles: false,
+      showRescan: false
+    },
+    {
+      id: "wenfxl-openai",
+      sectionId: "external-integrations",
+      sectionTitle: "外部集成",
+      eyebrow: "External Integration",
+      kicker: "WENFXL",
+      title: "wenfxl-openai",
+      desc: "嵌入已配置的 wenfxl-openai 页面",
+      pageDesc: "把已配置的 wenfxl-openai 地址直接嵌入到当前工作台，减少在多个系统之间来回切换。",
+      meta: wenfxlIntegrationReady.value ? "已配置" : "待配置",
+      showRefreshFiles: false,
+      showRescan: false
     }
   ];
 });
@@ -154,6 +192,9 @@ var currentRoute = computed(function () {
   return routeItems.value.find(function (item) {
     return item.id === activeRoute.value;
   }) || routeItems.value[0];
+});
+var immersiveRoute = computed(function () {
+  return currentRoute.value && currentRoute.value.id === "wenfxl-openai";
 });
 
 var routeMeta = computed(function () {
@@ -224,7 +265,7 @@ onMounted(function () {
       <div class="brand-block">
         <span class="brand-tag">Proxy Sprint</span>
         <h1>反代快速管理台</h1>
-        <p>按“文件管理 / 使用情况 / 系统设置”分域组织，让后续接更多能力时不再把左侧导航越堆越乱。</p>
+        <p>按“文件管理 / 使用情况 / 外部集成 / 系统设置”分域组织，让后续接更多能力时不再把左侧导航越堆越乱。</p>
       </div>
 
       <nav class="nav-list">
@@ -279,8 +320,8 @@ onMounted(function () {
       </div>
     </aside>
 
-    <section class="workspace-shell">
-      <header class="workspace-toolbar surface-card">
+    <section class="workspace-shell" :class="{ immersive: immersiveRoute }">
+      <header v-if="!immersiveRoute" class="workspace-toolbar surface-card">
         <div class="toolbar-copy">
           <span class="eyebrow">Workspace</span>
           <div class="breadcrumb-row">
@@ -313,7 +354,7 @@ onMounted(function () {
         </div>
       </header>
 
-      <section v-if="consoleApp.state.progressVisible || consoleApp.state.busy" class="progress-strip surface-card">
+      <section v-if="!immersiveRoute && (consoleApp.state.progressVisible || consoleApp.state.busy)" class="progress-strip surface-card">
         <div class="progress-copy">
           <strong>{{ consoleApp.state.progressVisible ? consoleApp.state.progressText : "当前无长任务" }}</strong>
           <span>{{ consoleApp.state.progress.done }}/{{ consoleApp.state.progress.total || "-" }}</span>
@@ -323,12 +364,15 @@ onMounted(function () {
         </div>
       </section>
 
-      <main class="workspace-body">
+      <main class="workspace-body" :class="{ immersive: immersiveRoute }">
         <FilePoolView v-if="activeRoute === 'files'" :console-app="consoleApp" :on-open-detail="openDetail" />
         <QuotaPoolView v-else-if="activeRoute === 'quotas'" :console-app="consoleApp" :on-open-detail="openDetail" />
         <DisabledPoolView v-else-if="activeRoute === 'disabled'" :console-app="consoleApp" :on-open-detail="openDetail" />
         <ExceptionCenterView v-else-if="activeRoute === 'exceptions'" :console-app="consoleApp" :on-open-detail="openDetail" />
         <RequestEventsView v-else-if="activeRoute === 'usage-events'" :console-app="consoleApp" />
+        <SettingsView v-else-if="activeRoute === 'settings'" :console-app="consoleApp" />
+        <IntegrationSettingsView v-else-if="activeRoute === 'integration-settings'" :console-app="consoleApp" @open-route="switchRoute" />
+        <ExternalIntegrationView v-else-if="activeRoute === 'wenfxl-openai'" :console-app="consoleApp" @open-route="switchRoute" />
         <SettingsView v-else :console-app="consoleApp" />
       </main>
     </section>
@@ -603,6 +647,11 @@ onMounted(function () {
   gap: 12px;
 }
 
+.workspace-shell.immersive {
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+}
+
 .workspace-toolbar,
 .progress-strip {
   padding: 12px 16px;
@@ -691,6 +740,10 @@ onMounted(function () {
   min-height: 0;
   overflow: hidden;
   display: flex;
+}
+
+.workspace-body.immersive {
+  height: 100%;
 }
 
 .workspace-body > * {

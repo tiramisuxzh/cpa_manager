@@ -13,8 +13,10 @@ import {
 } from "../lib/constants.js";
 import {
   readSettings,
+  readIntegrationSettings,
   readSnapshot,
   saveSnapshot,
+  writeIntegrationSettings,
   writeSettings
 } from "../services/persistence.js";
 import { useConsoleConfirm } from "./useConsoleConfirm.js";
@@ -36,6 +38,12 @@ function normalizedSettings(settings) {
     lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
     quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
     quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds))
+  };
+}
+
+function normalizedIntegrationSettings(settings) {
+  return {
+    wenfxlOpenaiUrl: String(settings.wenfxlOpenaiUrl || "").trim()
   };
 }
 
@@ -274,8 +282,9 @@ function parseUsagePayload(payload, items) {
 
 export function useManagementConsole() {
   var bootstrapped = ref(false);
-  var appConfig = ref({ management: {} });
+  var appConfig = ref({ management: {}, integrations: {} });
   var settings = reactive(readSettings(appConfig.value));
+  var integrationSettings = reactive(readIntegrationSettings(appConfig.value));
   var state = reactive({
     items: [],
     logs: [],
@@ -418,6 +427,10 @@ export function useManagementConsole() {
 
   function writeLocalSettings() {
     writeSettings(normalizedSettings(settings));
+  }
+
+  function writeLocalIntegrationSettings() {
+    writeIntegrationSettings(normalizedIntegrationSettings(integrationSettings));
   }
 
   function itemIdentity(item) {
@@ -794,6 +807,35 @@ export function useManagementConsole() {
     } finally {
       setBusy(false);
       finishPending("save-default-settings");
+    }
+  }
+
+  async function saveIntegrationSettings() {
+    var nextIntegrations = {
+      wenfxlOpenai: {
+        url: normalizedIntegrationSettings(integrationSettings).wenfxlOpenaiUrl
+      }
+    };
+
+    startPending("save-integration-settings");
+    setBusy(true);
+    setProgress("正在保存集成配置…", 36);
+
+    try {
+      // 集成配置与 management 默认值分开保存，避免不同设置页之间互相覆盖。
+      var savedConfig = await api.saveDefaultIntegrationConfig(nextIntegrations);
+
+      appConfig.value = Object.assign({}, appConfig.value, savedConfig || {}, {
+        integrations: Object.assign({}, nextIntegrations)
+      });
+      log("已将当前外部集成配置保存为默认配置。");
+      notify("集成配置已保存到 app-config.json。", "success");
+    } catch (error) {
+      log("保存集成配置失败：" + (error.message || "未知错误"), true);
+      notify("保存集成配置失败。", "danger", 3200);
+    } finally {
+      setBusy(false);
+      finishPending("save-integration-settings");
     }
   }
 
@@ -1358,6 +1400,12 @@ export function useManagementConsole() {
   });
 
   watch(function () {
+    return integrationSettings.wenfxlOpenaiUrl;
+  }, function () {
+    writeLocalIntegrationSettings();
+  });
+
+  watch(function () {
     return String(settings.lowQuotaThreshold || "");
   }, function () {
     if (bootstrapped.value && state.items.length) {
@@ -1387,9 +1435,10 @@ export function useManagementConsole() {
       var response = await fetch("/api/app-config");
       appConfig.value = await response.json();
     } catch (_) {
-      appConfig.value = { management: {} };
+      appConfig.value = { management: {}, integrations: {} };
     }
     Object.assign(settings, readSettings(appConfig.value));
+    Object.assign(integrationSettings, readIntegrationSettings(appConfig.value));
   }
 
   async function initialize() {
@@ -1425,6 +1474,7 @@ export function useManagementConsole() {
   return {
     appConfig: appConfig,
     settings: settings,
+    integrationSettings: integrationSettings,
     state: state,
     ui: ui,
     service: service,
@@ -1449,6 +1499,7 @@ export function useManagementConsole() {
     clearServiceProxy: clearServiceProxy,
     saveRetrySettings: saveRetrySettings,
     saveDefaultSettings: saveDefaultSettings,
+    saveIntegrationSettings: saveIntegrationSettings,
     rescan: rescan,
     deleteItems: fileActions.deleteItems,
     setItemsDisabled: fileActions.setItemsDisabled,

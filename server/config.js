@@ -16,6 +16,11 @@ const DEFAULT_CONFIG = {
     quotaConcurrency: 6,
     quotaRequestIntervalSeconds: 0
   },
+  integrations: {
+    wenfxlOpenai: {
+      url: ""
+    }
+  },
   remote: {
     host: "",
     port: 22,
@@ -58,6 +63,22 @@ function normalizeAutoRefreshMode(value) {
   return AUTO_REFRESH_MODE_FILES;
 }
 
+function normalizeIntegrationUrl(value) {
+  return String(value || "").trim();
+}
+
+function normalizeIntegrations(integrations) {
+  const input = integrations && typeof integrations === "object" ? integrations : {};
+  const wenfxlOpenaiInput = input.wenfxlOpenai || {};
+
+  return Object.assign({}, DEFAULT_CONFIG.integrations, input, {
+    wenfxlOpenai: Object.assign({}, DEFAULT_CONFIG.integrations.wenfxlOpenai, wenfxlOpenaiInput, {
+      // 外部集成地址不做过度裁剪，避免带路径的地址因为尾斜杠被误改后影响相对资源加载。
+      url: normalizeIntegrationUrl(wenfxlOpenaiInput.url)
+    })
+  });
+}
+
 function normalizeConfig(config) {
   const input = config && typeof config === "object" ? config : {};
   const remoteInput = input.remote || {};
@@ -68,6 +89,7 @@ function normalizeConfig(config) {
     management: Object.assign({}, DEFAULT_CONFIG.management, managementInput, {
       autoRefreshMode: normalizeAutoRefreshMode(managementInput.autoRefreshMode)
     }),
+    integrations: normalizeIntegrations(input.integrations),
     remote: Object.assign({}, DEFAULT_CONFIG.remote, remoteInput, {
       monitor: Object.assign({}, DEFAULT_CONFIG.remote.monitor, remoteInput.monitor || {})
     }),
@@ -99,6 +121,16 @@ function writeManagementConfig(management) {
   return writeConfig(next);
 }
 
+function writeIntegrationConfig(integrations) {
+  const current = readConfig();
+  const next = Object.assign({}, current, {
+    integrations: Object.assign({}, current.integrations, integrations || {})
+  });
+
+  // 外部集成配置独立回写，避免和 management 配置互相覆盖，后续扩展更多集成也能复用同一路径。
+  return writeConfig(next);
+}
+
 function readConfig() {
   try {
     return normalizeConfig(JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")));
@@ -111,6 +143,7 @@ function clientConfig(config) {
   const normalized = normalizeConfig(config);
   return {
     management: normalized.management,
+    integrations: normalized.integrations,
     remote: normalized.remote,
     mail: normalized.mail
   };
@@ -124,6 +157,7 @@ module.exports = {
   readConfig,
   writeConfig,
   writeManagementConfig,
+  writeIntegrationConfig,
   clientConfig,
   serverConfig,
   CONFIG_PATH

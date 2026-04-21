@@ -146,6 +146,15 @@ export function createApi(getSettings) {
     });
   }
 
+  function saveDefaultIntegrationConfig(integrations) {
+    return localRequest("/api/integrations-config", {
+      method: "PATCH",
+      body: {
+        integrations: integrations || {}
+      }
+    });
+  }
+
   return {
     request: request,
     localRequest: localRequest,
@@ -159,6 +168,7 @@ export function createApi(getSettings) {
     clearManagementValue: clearManagementValue,
     deleteAuthFile: deleteAuthFile,
     setAuthFileDisabled: setAuthFileDisabled,
-    saveDefaultManagementConfig: saveDefaultManagementConfig
+    saveDefaultManagementConfig: saveDefaultManagementConfig,
+    saveDefaultIntegrationConfig: saveDefaultIntegrationConfig
   };
 }

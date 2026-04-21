@@ -1,11 +1,16 @@
 import {
   AUTO_REFRESH_MODES,
+  INTEGRATION_STORE,
   SNAPSHOT_STORE,
   STORE,
   normalizeAutoRefreshMode
 } from "../lib/constants.js";
 
 function normalizedConfig(config) {
+  return config && typeof config === "object" ? config : {};
+}
+
+function normalizedIntegrations(config) {
   return config && typeof config === "object" ? config : {};
 }
 
@@ -91,6 +96,25 @@ export function writeSettings(settings) {
       lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
       quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
       quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds))
+    }));
+  } catch (_) {}
+}
+
+// 集成配置使用独立的本地存储 key，避免保存管理地址时把外部集成地址一起覆盖。
+export function readIntegrationSettings(config) {
+  var raw = safeRead(INTEGRATION_STORE);
+  var defaults = normalizedIntegrations(config).integrations || {};
+  var wenfxlOpenai = defaults.wenfxlOpenai || {};
+
+  return {
+    wenfxlOpenaiUrl: String(raw.wenfxlOpenaiUrl != null ? raw.wenfxlOpenaiUrl : wenfxlOpenai.url || "").trim()
+  };
+}
+
+export function writeIntegrationSettings(settings) {
+  try {
+    localStorage.setItem(INTEGRATION_STORE, JSON.stringify({
+      wenfxlOpenaiUrl: String(settings.wenfxlOpenaiUrl || "").trim()
     }));
   } catch (_) {}
 }
