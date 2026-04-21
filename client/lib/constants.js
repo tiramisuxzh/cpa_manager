@@ -6,6 +6,26 @@ export const FIVE_HOUR = 18000;
 export const WEEK = 604800;
 export const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 export const DEFAULT_PAGE_SIZE = 50;
+export const AUTO_REFRESH_MODES = {
+  FILES: "files",
+  FILES_AND_QUOTAS: "files-and-quotas"
+};
+export const AUTO_REFRESH_MODE_OPTIONS = [
+  { value: AUTO_REFRESH_MODES.FILES, label: "只文件" },
+  { value: AUTO_REFRESH_MODES.FILES_AND_QUOTAS, label: "文件 + 额度" }
+];
+
+// 自动刷新模式需要兼容旧版本本地缓存与 app-config.json，未知值统一回退到更稳妥的“只文件”。
+export function normalizeAutoRefreshMode(value) {
+  var input = String(value || "").trim().toLowerCase();
+
+  if (input === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
+    return AUTO_REFRESH_MODES.FILES_AND_QUOTAS;
+  }
+
+  return AUTO_REFRESH_MODES.FILES;
+}
+
 // 把工作台级动作和单文件动作的等待分组收口，避免组件里散落硬编码字符串。
 export const PENDING_GROUPS = {
   workbench: [

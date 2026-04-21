@@ -5,6 +5,7 @@
     "interval": 30,
     "showFilename": false,
     "autoRefresh": true,
+    "autoRefreshMode": "files",
     "lowQuotaThreshold": 20,
     "quotaConcurrency": 6,
     "quotaRequestIntervalSeconds": 1

@@ -2,6 +2,8 @@ const fs = require("fs");
 const path = require("path");
 
 const CONFIG_PATH = path.resolve(__dirname, "..", "config", "app-config.json");
+const AUTO_REFRESH_MODE_FILES = "files";
+const AUTO_REFRESH_MODE_FILES_AND_QUOTAS = "files-and-quotas";
 const DEFAULT_CONFIG = {
   management: {
     baseUrl: "",
@@ -9,6 +11,7 @@ const DEFAULT_CONFIG = {
     interval: 10,
     showFilename: false,
     autoRefresh: false,
+    autoRefreshMode: AUTO_REFRESH_MODE_FILES,
     lowQuotaThreshold: 20,
     quotaConcurrency: 6,
     quotaRequestIntervalSeconds: 0
@@ -47,12 +50,24 @@ const DEFAULT_CONFIG = {
   }
 };
 
+function normalizeAutoRefreshMode(value) {
+  if (String(value || "").trim().toLowerCase() === AUTO_REFRESH_MODE_FILES_AND_QUOTAS) {
+    return AUTO_REFRESH_MODE_FILES_AND_QUOTAS;
+  }
+
+  return AUTO_REFRESH_MODE_FILES;
+}
+
 function normalizeConfig(config) {
   const input = config && typeof config === "object" ? config : {};
   const remoteInput = input.remote || {};
+  const managementInput = input.management || {};
 
   return {
-    management: Object.assign({}, DEFAULT_CONFIG.management, input.management || {}),
+    // management 配置每次都做规范化，确保旧配置升级后也能稳定拿到自动刷新模式默认值。
+    management: Object.assign({}, DEFAULT_CONFIG.management, managementInput, {
+      autoRefreshMode: normalizeAutoRefreshMode(managementInput.autoRefreshMode)
+    }),
     remote: Object.assign({}, DEFAULT_CONFIG.remote, remoteInput, {
       monitor: Object.assign({}, DEFAULT_CONFIG.remote.monitor, remoteInput.monitor || {})
     }),

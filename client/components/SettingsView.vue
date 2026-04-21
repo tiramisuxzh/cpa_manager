@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from "vue";
+import { AUTO_REFRESH_MODE_OPTIONS } from "../lib/constants.js";
 import { PENDING_GROUPS } from "../lib/constants.js";
 
 var props = defineProps({
@@ -12,6 +13,7 @@ var props = defineProps({
 var connectionReady = computed(function () {
   return !!String(props.consoleApp.settings.baseUrl || "").trim() && !!String(props.consoleApp.settings.key || "").trim();
 });
+var autoRefreshModes = AUTO_REFRESH_MODE_OPTIONS;
 
 function pendingText(type, idleText, loadingText, key) {
   return props.consoleApp.isPending(type, key) ? loadingText : idleText;
@@ -64,13 +66,21 @@ function pendingText(type, idleText, loadingText, key) {
       <article class="surface-card settings-card">
         <div class="card-head">
           <h4>本地行为</h4>
-          <span class="meta-copy">只影响当前管理台的显示方式和文件列表自动刷新，不再提供进入页面自动加载。</span>
+          <span class="meta-copy">只影响当前管理台的显示方式和自动刷新策略，不再提供进入页面自动加载。</span>
         </div>
 
         <div class="field-grid">
           <label class="field">
             <span>文件列表自动刷新间隔（分钟）</span>
             <input v-model.number="props.consoleApp.settings.interval" class="text-input" type="number" min="1" max="1440">
+          </label>
+          <label class="field">
+            <span>自动刷新模式</span>
+            <select v-model="props.consoleApp.settings.autoRefreshMode" class="select-input">
+              <option v-for="option in autoRefreshModes" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
           </label>
         </div>
 
@@ -84,6 +94,8 @@ function pendingText(type, idleText, loadingText, key) {
             <span>文件名优先显示</span>
           </label>
         </div>
+
+        <p class="meta-copy">自动刷新关闭时会保留当前模式配置。开启后可按需选择只刷新文件列表，或同时补拉文件和额度。</p>
       </article>
 
       <article class="surface-card settings-card">

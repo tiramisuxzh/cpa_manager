@@ -8,6 +8,10 @@ import {
 } from "../lib/auth-file-state.js";
 import { sortItems } from "../lib/utils.js";
 import {
+  AUTO_REFRESH_MODES,
+  normalizeAutoRefreshMode
+} from "../lib/constants.js";
+import {
   readSettings,
   readSnapshot,
   saveSnapshot,
@@ -28,10 +32,19 @@ function normalizedSettings(settings) {
     interval: Math.max(1, parseInt(settings.interval, 10) || 10),
     showFilename: !!settings.showFilename,
     autoRefresh: !!settings.autoRefresh,
+    autoRefreshMode: normalizeAutoRefreshMode(settings.autoRefreshMode),
     lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
     quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
     quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds))
   };
+}
+
+function autoRefreshModeSummary(mode) {
+  if (mode === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
+    return "同步文件列表并刷新额度";
+  }
+
+  return "仅同步文件列表";
 }
 
 function extractServiceValue(payload, keys) {
@@ -996,8 +1009,12 @@ export function useManagementConsole() {
       }
     } catch (error) {
       state.statusText = "文件列表拉取失败，请检查连接";
-      log("文件列表刷新失败：" + (error.message || "未知错误"), true);
-      notify("文件列表刷新失败，请检查管理地址与 Management Key。", "danger", 3200);
+      if (!currentOptions.silentLog) {
+        log("文件列表刷新失败：" + (error.message || "未知错误"), true);
+      }
+      if (!currentOptions.silentErrorToast) {
+        notify("文件列表刷新失败，请检查管理地址与 Management Key。", "danger", 3200);
+      }
     } finally {
       setBusy(false);
       if (pendingType) {
@@ -1125,6 +1142,7 @@ export function useManagementConsole() {
   async function loadAll(options) {
     var currentOptions = options || {};
     var pendingType = currentOptions.pendingType || "";
+    var includeUsage = currentOptions.includeUsage !== false;
 
     if (pendingType) {
       startPending(pendingType, currentOptions.pendingKey || "");
@@ -1132,13 +1150,15 @@ export function useManagementConsole() {
 
     writeLocalSettings();
     setBusy(true);
-    setProgress("正在同步文件列表与额度…", 8);
+    setProgress(includeUsage ? "正在同步文件列表、请求统计与额度…" : "正在同步文件列表与额度…", 8);
     state.statusText = "正在拉取账号列表…";
     state.refreshId += 1;
     var refreshId = state.refreshId;
 
     try {
-      log("开始同步认证文件与额度数据。");
+      if (!currentOptions.silentLog) {
+        log(includeUsage ? "开始同步认证文件、请求统计与额度数据。" : "开始同步认证文件与额度数据。");
+      }
       var data = await api.request("/auth-files");
       var files = extractCodexFiles(data);
 
@@ -1147,28 +1167,43 @@ export function useManagementConsole() {
       }
 
       applyAuthFiles(files);
-      log("认证文件已载入，Codex 账号 " + state.items.length + " 个，开始拉取 usage 与额度明细。");
+      if (!currentOptions.silentLog) {
+        log("认证文件已载入，Codex 账号 " + state.items.length + " 个，开始拉取" + (includeUsage ? "请求统计与额度明细。" : "额度明细。"));
+      }
 
-      await Promise.all([
-        loadUsageStats(refreshId),
-        loadQuotas(refreshId, {
+      if (includeUsage) {
+        await Promise.all([
+          loadUsageStats(refreshId),
+          loadQuotas(refreshId, {
+            items: state.items,
+            silentLog: true
+          })
+        ]);
+      } else {
+        await loadQuotas(refreshId, {
           items: state.items,
           silentLog: true
-        })
-      ]);
+        });
+      }
 
       if (refreshId !== state.refreshId) {
         return;
       }
 
-      log("文件与额度同步完成，共处理 " + state.items.length + " 个账号。");
+      if (!currentOptions.silentLog) {
+        log((includeUsage ? "文件、请求统计与额度同步完成，共处理 " : "文件与额度同步完成，共处理 ") + state.items.length + " 个账号。");
+      }
       if (!currentOptions.silentToast) {
-        notify("同步完成，当前共 " + state.items.length + " 个 Codex 账号。", "success");
+        notify((includeUsage ? "文件、请求统计与额度同步完成，当前共 " : "文件与额度同步完成，当前共 ") + state.items.length + " 个 Codex 账号。", "success");
       }
     } catch (error) {
       state.statusText = "同步失败，请检查连接";
-      log("同步失败：认证文件或额度加载异常，" + (error.message || "未知错误"), true);
-      notify("同步失败，请检查管理地址与 Management Key。", "danger", 3200);
+      if (!currentOptions.silentLog) {
+        log("同步失败：认证文件或额度加载异常，" + (error.message || "未知错误"), true);
+      }
+      if (!currentOptions.silentErrorToast) {
+        notify("同步失败，请检查管理地址与 Management Key。", "danger", 3200);
+      }
     } finally {
       setBusy(false);
       if (pendingType) {
@@ -1193,8 +1228,10 @@ export function useManagementConsole() {
   }
 
   function restartAutoRefresh(options) {
+    var currentSettings = normalizedSettings(settings);
+
     clearAutoRefreshTimer();
-    if (!normalizedSettings(settings).autoRefresh) {
+    if (!currentSettings.autoRefresh) {
       if (!options || !options.silent) {
         log("自动刷新已关闭。");
       }
@@ -1203,12 +1240,27 @@ export function useManagementConsole() {
 
     autoRefreshTimer = setInterval(function () {
       if (!state.busy) {
-        loadFiles({ silentToast: true, silentLog: true });
+        if (currentSettings.autoRefreshMode === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
+          // 自动刷新走“文件 + 额度”时，只补齐用户关心的两类数据，不额外触发 usage 明细同步。
+          loadAll({
+            includeUsage: false,
+            silentToast: true,
+            silentErrorToast: true,
+            silentLog: true
+          });
+          return;
+        }
+
+        loadFiles({
+          silentToast: true,
+          silentErrorToast: true,
+          silentLog: true
+        });
       }
-    }, normalizedSettings(settings).interval * 60 * 1000);
+    }, currentSettings.interval * 60 * 1000);
 
     if (!options || !options.silent) {
-      log("自动刷新已开启，间隔 " + normalizedSettings(settings).interval + " 分钟，仅同步文件列表。");
+      log("自动刷新已开启，间隔 " + currentSettings.interval + " 分钟，" + autoRefreshModeSummary(currentSettings.autoRefreshMode) + "。");
     }
   }
 
@@ -1296,6 +1348,7 @@ export function useManagementConsole() {
       settings.interval,
       settings.showFilename,
       settings.autoRefresh,
+      settings.autoRefreshMode,
       settings.lowQuotaThreshold,
       settings.quotaConcurrency,
       settings.quotaRequestIntervalSeconds
@@ -1313,7 +1366,7 @@ export function useManagementConsole() {
   });
 
   watch(function () {
-    return settings.autoRefresh + "::" + settings.interval;
+    return settings.autoRefresh + "::" + settings.interval + "::" + settings.autoRefreshMode;
   }, function () {
     if (bootstrapped.value) {
       restartAutoRefresh();

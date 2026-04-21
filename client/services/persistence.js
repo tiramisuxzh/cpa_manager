@@ -1,4 +1,9 @@
-import { SNAPSHOT_STORE, STORE } from "../lib/constants.js";
+import {
+  AUTO_REFRESH_MODES,
+  SNAPSHOT_STORE,
+  STORE,
+  normalizeAutoRefreshMode
+} from "../lib/constants.js";
 
 function normalizedConfig(config) {
   return config && typeof config === "object" ? config : {};
@@ -57,6 +62,7 @@ export function readSettings(config) {
   var lowQuotaThreshold = parseInt(raw.lowQuotaThreshold != null ? raw.lowQuotaThreshold : defaults.lowQuotaThreshold, 10);
   var quotaConcurrency = parseInt(raw.quotaConcurrency != null ? raw.quotaConcurrency : defaults.quotaConcurrency, 10);
   var quotaRequestIntervalSeconds = parseFloat(raw.quotaRequestIntervalSeconds != null ? raw.quotaRequestIntervalSeconds : defaults.quotaRequestIntervalSeconds);
+  var autoRefreshMode = raw.autoRefreshMode != null ? raw.autoRefreshMode : defaults.autoRefreshMode;
 
   return {
     baseUrl: raw.baseUrl || defaults.baseUrl || "http://127.0.0.1:8317",
@@ -64,6 +70,7 @@ export function readSettings(config) {
     interval: Math.max(1, parseInt(raw.interval != null ? raw.interval : defaults.interval, 10) || 10),
     showFilename: raw.showFilename != null ? !!raw.showFilename : !!defaults.showFilename,
     autoRefresh: raw.autoRefresh != null ? !!raw.autoRefresh : !!defaults.autoRefresh,
+    autoRefreshMode: normalizeAutoRefreshMode(autoRefreshMode || AUTO_REFRESH_MODES.FILES),
     lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
     quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
     quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds))
@@ -80,6 +87,7 @@ export function writeSettings(settings) {
       interval: Math.max(1, parseInt(settings.interval, 10) || 10),
       showFilename: !!settings.showFilename,
       autoRefresh: !!settings.autoRefresh,
+      autoRefreshMode: normalizeAutoRefreshMode(settings.autoRefreshMode || AUTO_REFRESH_MODES.FILES),
       lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
       quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
       quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds))

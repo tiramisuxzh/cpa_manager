@@ -1,0 +1,13 @@
+# 前端依赖与构建产物不进入版本库，避免 Vue 迁移后工作区被大批生成文件污染。
+node_modules/
+dist/
+
+# Vite 本地缓存
+.vite/
+
+# 系统与日志文件
+*.log
+Thumbs.db
+temp/
+temp
+.idea

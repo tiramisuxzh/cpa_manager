@@ -62,6 +62,7 @@ config/app-config.json
 - `management.interval`
 - `management.showFilename`
 - `management.autoRefresh`
+- `management.autoRefreshMode` (`files` / `files-and-quotas`)
 - `management.lowQuotaThreshold`
 - `management.quotaConcurrency`
 - `management.quotaRequestIntervalSeconds`
