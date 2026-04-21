@@ -31,7 +31,7 @@
 
 ```bash
 git clone <your-repo-url>
-cd ForJk
+cd 解压后的路径
 npm install
 ```
 
