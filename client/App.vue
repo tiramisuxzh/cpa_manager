@@ -16,6 +16,9 @@ import { PENDING_GROUPS } from "./lib/constants.js";
 
 var consoleApp = useManagementConsole();
 var activeRoute = ref("files");
+var cachedRoutes = ref({
+  "wenfxl-openai": false
+});
 var collapsedSections = ref({
   "file-management": false,
   usage: true,
@@ -247,6 +250,10 @@ function switchRoute(routeId) {
   if (activeRoute.value === routeId) {
     return;
   }
+  // 外部集成页首次进入后保活，避免来回切换菜单时 iframe 被销毁后重新加载。
+  if (routeId === "wenfxl-openai") {
+    cachedRoutes.value["wenfxl-openai"] = true;
+  }
   // 不同工作区的批量动作语义不同，切菜单时主动清空勾选，避免跨域残留选中项被误操作。
   consoleApp.clearSelection();
   expandRouteSection(routeId);
@@ -254,6 +261,9 @@ function switchRoute(routeId) {
 }
 
 onMounted(function () {
+  if (activeRoute.value === "wenfxl-openai") {
+    cachedRoutes.value["wenfxl-openai"] = true;
+  }
   expandRouteSection(activeRoute.value);
   consoleApp.initialize();
 });
@@ -372,8 +382,13 @@ onMounted(function () {
         <RequestEventsView v-else-if="activeRoute === 'usage-events'" :console-app="consoleApp" />
         <SettingsView v-else-if="activeRoute === 'settings'" :console-app="consoleApp" />
         <IntegrationSettingsView v-else-if="activeRoute === 'integration-settings'" :console-app="consoleApp" @open-route="switchRoute" />
-        <ExternalIntegrationView v-else-if="activeRoute === 'wenfxl-openai'" :console-app="consoleApp" @open-route="switchRoute" />
-        <SettingsView v-else :console-app="consoleApp" />
+        <SettingsView v-else-if="activeRoute !== 'wenfxl-openai'" :console-app="consoleApp" />
+        <ExternalIntegrationView
+          v-if="cachedRoutes['wenfxl-openai']"
+          v-show="activeRoute === 'wenfxl-openai'"
+          :console-app="consoleApp"
+          @open-route="switchRoute"
+        />
       </main>
     </section>
 
