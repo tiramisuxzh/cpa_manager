@@ -9,6 +9,15 @@
 - 停用池与异常处置：区分 401、额度异常、其他异常
 - 请求事件明细：查看成功 / 失败、来源、认证索引和 Token 消耗
 
+## 效果图预览
+
+<img width="1845" height="880" alt="图片" src="https://github.com/user-attachments/assets/ceb21ccd-c607-416f-8db7-1b9f309228ea" />
+<img width="1839" height="877" alt="图片" src="https://github.com/user-attachments/assets/691ccaaa-2269-4daf-9e98-7bc0acefeb3b" />
+<img width="1825" height="885" alt="图片" src="https://github.com/user-attachments/assets/8e986e97-1bdf-42bf-a4ab-bbf56dd834aa" />
+<img width="1853" height="903" alt="图片" src="https://github.com/user-attachments/assets/5ad19225-baca-4318-9cb4-28837299e7b5" />
+<img width="1844" height="887" alt="图片" src="https://github.com/user-attachments/assets/1197e02c-3299-4e1f-9fac-c2570c252f78" />
+
+
 ## 运行环境
 
 开始前请先准备：
