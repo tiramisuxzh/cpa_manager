@@ -55,6 +55,14 @@ function autoRefreshModeSummary(mode) {
   return "仅同步文件列表";
 }
 
+function autoRefreshModeLabel(mode) {
+  if (mode === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
+    return "文件 + 额度";
+  }
+
+  return "只文件";
+}
+
 function extractServiceValue(payload, keys) {
   var keyList = Array.isArray(keys) ? keys : [];
   var preferredKeys = keyList.concat(["value", "enabled", "data", "result"]);
@@ -296,7 +304,13 @@ export function useManagementConsole() {
     progress: { done: 0, total: 0 },
     progressVisible: false,
     progressText: "等待任务开始…",
-    progressPercent: 0
+    progressPercent: 0,
+    autoRefreshInfo: {
+      running: false,
+      lastRunAt: "",
+      lastResult: "idle",
+      lastMessage: ""
+    }
   });
   var ui = reactive({
     detailKey: "",
@@ -399,6 +413,47 @@ export function useManagementConsole() {
       clearInterval(autoRefreshTimer);
       autoRefreshTimer = null;
     }
+  }
+
+  function isAutoRefreshTrigger(options) {
+    return !!(options && options.triggerSource === "auto-refresh");
+  }
+
+  function nowText() {
+    return new Date().toLocaleString("zh-CN", { hour12: false });
+  }
+
+  // 自动刷新默认是静默执行，这里单独维护最近一次运行结果，方便在左下角状态区排查是否真的触发过。
+  function markAutoRefreshRunning(options) {
+    if (!isAutoRefreshTrigger(options)) {
+      return;
+    }
+
+    state.autoRefreshInfo.running = true;
+  }
+
+  function markAutoRefreshSuccess(options) {
+    if (!isAutoRefreshTrigger(options)) {
+      return;
+    }
+
+    state.autoRefreshInfo.running = false;
+    state.autoRefreshInfo.lastRunAt = nowText();
+    state.autoRefreshInfo.lastResult = "success";
+    state.autoRefreshInfo.lastMessage = autoRefreshModeLabel(options.autoRefreshMode) + " 已完成自动同步";
+  }
+
+  function markAutoRefreshFailure(options, error) {
+    if (!isAutoRefreshTrigger(options)) {
+      return;
+    }
+
+    state.autoRefreshInfo.running = false;
+    state.autoRefreshInfo.lastRunAt = nowText();
+    state.autoRefreshInfo.lastResult = "error";
+    state.autoRefreshInfo.lastMessage = error && error.message
+      ? error.message
+      : (autoRefreshModeLabel(options.autoRefreshMode) + " 自动同步失败");
   }
 
   function currentClassifierOptions() {
@@ -1019,6 +1074,7 @@ export function useManagementConsole() {
     }
 
     writeLocalSettings();
+    markAutoRefreshRunning(currentOptions);
     setBusy(true);
     setProgress(currentOptions.progressLabel || "正在拉取认证文件列表…", 12);
     state.statusText = "正在拉取账号列表…";
@@ -1042,6 +1098,7 @@ export function useManagementConsole() {
         ? ("文件列表已同步 · 共 " + state.items.length + " 个账号")
         : "文件列表已同步，当前没有 Codex 账号";
       setProgress(currentOptions.finishProgressText || "文件列表同步完成。", 100);
+      markAutoRefreshSuccess(currentOptions);
 
       if (!currentOptions.silentLog) {
         log(currentOptions.completeLog || ("认证文件列表已同步，共 " + state.items.length + " 个 Codex 账号。"));
@@ -1051,6 +1108,7 @@ export function useManagementConsole() {
       }
     } catch (error) {
       state.statusText = "文件列表拉取失败，请检查连接";
+      markAutoRefreshFailure(currentOptions, error);
       if (!currentOptions.silentLog) {
         log("文件列表刷新失败：" + (error.message || "未知错误"), true);
       }
@@ -1191,6 +1249,7 @@ export function useManagementConsole() {
     }
 
     writeLocalSettings();
+    markAutoRefreshRunning(currentOptions);
     setBusy(true);
     setProgress(includeUsage ? "正在同步文件列表、请求统计与额度…" : "正在同步文件列表与额度…", 8);
     state.statusText = "正在拉取账号列表…";
@@ -1235,11 +1294,13 @@ export function useManagementConsole() {
       if (!currentOptions.silentLog) {
         log((includeUsage ? "文件、请求统计与额度同步完成，共处理 " : "文件与额度同步完成，共处理 ") + state.items.length + " 个账号。");
       }
+      markAutoRefreshSuccess(currentOptions);
       if (!currentOptions.silentToast) {
         notify((includeUsage ? "文件、请求统计与额度同步完成，当前共 " : "文件与额度同步完成，当前共 ") + state.items.length + " 个 Codex 账号。", "success");
       }
     } catch (error) {
       state.statusText = "同步失败，请检查连接";
+      markAutoRefreshFailure(currentOptions, error);
       if (!currentOptions.silentLog) {
         log("同步失败：认证文件或额度加载异常，" + (error.message || "未知错误"), true);
       }
@@ -1288,7 +1349,9 @@ export function useManagementConsole() {
             includeUsage: false,
             silentToast: true,
             silentErrorToast: true,
-            silentLog: true
+            silentLog: true,
+            triggerSource: "auto-refresh",
+            autoRefreshMode: currentSettings.autoRefreshMode
           });
           return;
         }
@@ -1296,7 +1359,9 @@ export function useManagementConsole() {
         loadFiles({
           silentToast: true,
           silentErrorToast: true,
-          silentLog: true
+          silentLog: true,
+          triggerSource: "auto-refresh",
+          autoRefreshMode: currentSettings.autoRefreshMode
         });
       }
     }, currentSettings.interval * 60 * 1000);

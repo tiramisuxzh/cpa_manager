@@ -206,6 +206,47 @@ var routeMeta = computed(function () {
     title: currentRoute.value.title
   };
 });
+var autoRefreshFooter = computed(function () {
+  var info = consoleApp.state.autoRefreshInfo || {};
+
+  if (!consoleApp.settings.autoRefresh) {
+    return {
+      tone: "neutral",
+      title: "自动刷新已关闭",
+      detail: "开启后会按设定间隔静默执行"
+    };
+  }
+
+  if (info.running) {
+    return {
+      tone: "info",
+      title: "自动刷新执行中",
+      detail: info.lastRunAt ? ("上次执行 " + info.lastRunAt) : ("间隔 " + consoleApp.settings.interval + " 分钟")
+    };
+  }
+
+  if (!info.lastRunAt) {
+    return {
+      tone: "neutral",
+      title: "自动刷新已开启",
+      detail: "等待首次执行"
+    };
+  }
+
+  if (info.lastResult === "error") {
+    return {
+      tone: "danger",
+      title: "最近失败 " + info.lastRunAt,
+      detail: info.lastMessage || "自动刷新执行失败"
+    };
+  }
+
+  return {
+    tone: "success",
+    title: "最近成功 " + info.lastRunAt,
+    detail: info.lastMessage || "自动刷新执行成功"
+  };
+});
 
 var progressStyle = computed(function () {
   return {
@@ -327,6 +368,10 @@ onMounted(function () {
           <strong>{{ consoleApp.state.busy ? "处理中" : "空闲" }}</strong>
         </div>
         <p>{{ consoleApp.state.statusText }}</p>
+        <div class="auto-refresh-footer" :class="'tone-' + autoRefreshFooter.tone">
+          <strong>{{ autoRefreshFooter.title }}</strong>
+          <span>{{ autoRefreshFooter.detail }}</span>
+        </div>
       </div>
     </aside>
 
@@ -653,6 +698,44 @@ onMounted(function () {
   align-items: center;
   gap: 8px;
   color: rgba(239, 244, 255, 0.92);
+}
+
+.auto-refresh-footer {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.auto-refresh-footer strong {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.auto-refresh-footer span {
+  color: rgba(239, 244, 255, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auto-refresh-footer.tone-success {
+  border-color: rgba(22, 163, 74, 0.22);
+  background: rgba(22, 163, 74, 0.08);
+  color: #dcfce7;
+}
+
+.auto-refresh-footer.tone-danger {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(220, 38, 38, 0.08);
+  color: #fee2e2;
+}
+
+.auto-refresh-footer.tone-info {
+  border-color: rgba(22, 119, 255, 0.22);
+  background: rgba(22, 119, 255, 0.08);
+  color: #dbeafe;
 }
 
 .workspace-shell {
