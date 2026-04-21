@@ -1,0 +1,315 @@
+:root {
+  color-scheme: light;
+  --bg: #edf3fb;
+  --bg-soft: #e4edf8;
+  --bg-strong: #d8e5f5;
+  --panel: rgba(255, 255, 255, 0.9);
+  --panel-strong: #ffffff;
+  --panel-muted: rgba(247, 250, 255, 0.92);
+  --sidebar: #0d1624;
+  --sidebar-line: rgba(255, 255, 255, 0.08);
+  --ink-strong: #111b2b;
+  --text-strong: #182234;
+  --text-muted: #5e6b82;
+  --text-soft: #71809a;
+  --text-faint: #96a3b9;
+  --accent: #1677ff;
+  --accent-strong: #0b5dd0;
+  --accent-soft: rgba(22, 119, 255, 0.12);
+  --accent-glow: rgba(22, 119, 255, 0.18);
+  --success: #16a34a;
+  --success-soft: rgba(22, 163, 74, 0.12);
+  --warn: #d97706;
+  --warn-soft: rgba(217, 119, 6, 0.12);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.12);
+  --violet: #7c3aed;
+  --violet-soft: rgba(124, 58, 237, 0.12);
+  --line-soft: rgba(24, 34, 52, 0.08);
+  --line-strong: rgba(24, 34, 52, 0.16);
+  --shadow-soft: 0 18px 40px rgba(14, 23, 38, 0.08);
+  --shadow-large: 0 32px 90px rgba(14, 23, 38, 0.12);
+  --font-display: "Aptos Display", "Segoe UI Variable Display", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  --font-body: "Aptos", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  background:
+    radial-gradient(circle at 12% 14%, rgba(22, 119, 255, 0.14), transparent 26%),
+    radial-gradient(circle at 82% 10%, rgba(20, 184, 166, 0.12), transparent 24%),
+    linear-gradient(180deg, #f5f8fd 0%, #eef3fb 46%, #e6edf8 100%);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.28;
+  background-image:
+    linear-gradient(rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
+  background-size: 36px 36px;
+  mask-image: radial-gradient(circle at center, black, transparent 88%);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  appearance: none;
+}
+
+input,
+select,
+textarea {
+  outline: none;
+}
+
+a {
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(22, 119, 255, 0.18);
+}
+
+.surface-card {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 24px;
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(16px);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.pill strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.eyebrow {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.primary-btn,
+.secondary-btn,
+.ghost-btn,
+.danger-btn,
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+}
+
+.primary-btn:hover,
+.secondary-btn:hover,
+.ghost-btn:hover,
+.danger-btn:hover,
+.mini-btn:hover {
+  transform: translateY(-1px);
+}
+
+.primary-btn {
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  box-shadow: 0 10px 30px var(--accent-glow);
+}
+
+.secondary-btn {
+  color: var(--text-strong);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-soft);
+}
+
+.ghost-btn {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--line-soft);
+}
+
+.danger-btn {
+  color: var(--danger);
+  background: rgba(255, 241, 241, 0.96);
+  box-shadow: var(--shadow-soft);
+}
+
+.mini-btn {
+  min-height: 34px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-strong);
+  font-size: 12px;
+  box-shadow: var(--shadow-soft);
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled,
+.ghost-btn:disabled,
+.danger-btn:disabled,
+.mini-btn:disabled {
+  cursor: default;
+  opacity: 0.56;
+  transform: none;
+}
+
+.button-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.button-label::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  opacity: 0;
+  flex: 0 0 12px;
+}
+
+.button-label.pending::before {
+  opacity: 1;
+  animation: spin 0.7s linear infinite;
+}
+
+.text-input,
+.select-input,
+.textarea-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text-strong);
+}
+
+.text-input:focus,
+.select-input:focus,
+.textarea-input:focus {
+  border-color: rgba(22, 119, 255, 0.3);
+  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.12);
+}
+
+.switch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.switch-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.tone-success {
+  background: rgba(239, 253, 244, 0.96);
+  border-color: rgba(22, 163, 74, 0.16);
+  color: var(--success);
+}
+
+.tone-warn {
+  background: rgba(255, 247, 237, 0.98);
+  border-color: rgba(217, 119, 6, 0.18);
+  color: var(--warn);
+}
+
+.tone-danger {
+  background: rgba(255, 241, 241, 0.98);
+  border-color: rgba(220, 38, 38, 0.18);
+  color: var(--danger);
+}
+
+.tone-info {
+  background: rgba(239, 246, 255, 0.98);
+  border-color: rgba(22, 119, 255, 0.18);
+  color: var(--accent);
+}
+
+.tone-neutral {
+  background: rgba(248, 250, 252, 0.96);
+  border-color: rgba(100, 116, 139, 0.18);
+  color: var(--text-muted);
+}
+
+.tone-violet {
+  background: rgba(245, 243, 255, 0.98);
+  border-color: rgba(124, 58, 237, 0.18);
+  color: var(--violet);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

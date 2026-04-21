@@ -1,0 +1,44 @@
+{
+  "management": {
+    "baseUrl": "http://localhost:8317",
+    "key": "",
+    "interval": 30,
+    "showFilename": false,
+    "autoRefresh": true,
+    "lowQuotaThreshold": 20,
+    "quotaConcurrency": 6,
+    "quotaRequestIntervalSeconds": 1
+  },
+  "remote": {
+    "host": "",
+    "port": 22,
+    "username": "",
+    "password": "",
+    "scriptPath": "",
+    "tokenDir": "",
+    "skipConfigPanel": true,
+    "autoStart": true,
+    "monitor": {
+      "enabled": false,
+      "intervalMinutes": 5,
+      "minUsableCount": 15,
+      "minAverageQuota": 50,
+      "recoveryBuffer": 10
+    }
+  },
+  "mail": {
+    "imapHost": "imap.qq.com",
+    "imapPort": 993,
+    "secure": true,
+    "qqAddress": "",
+    "authCode": "",
+    "senders": [],
+    "promptKeywords": []
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8090,
+    "allowRemoteAccess": false,
+    "allowedOrigins": []
+  }
+}
