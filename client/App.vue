@@ -213,7 +213,8 @@ var autoRefreshFooter = computed(function () {
     return {
       tone: "neutral",
       title: "自动刷新已关闭",
-      detail: "开启后会按设定间隔静默执行"
+      detail: "开启后会按设定间隔静默执行",
+      nextRun: ""
     };
   }
 
@@ -221,7 +222,8 @@ var autoRefreshFooter = computed(function () {
     return {
       tone: "info",
       title: "自动刷新执行中",
-      detail: info.lastRunAt ? ("上次执行 " + info.lastRunAt) : ("间隔 " + consoleApp.settings.interval + " 分钟")
+      detail: info.lastRunAt ? ("上次执行 " + info.lastRunAt) : ("间隔 " + consoleApp.settings.interval + " 分钟"),
+      nextRun: info.nextRunAt ? ("下次预计 " + info.nextRunAt) : ""
     };
   }
 
@@ -229,7 +231,8 @@ var autoRefreshFooter = computed(function () {
     return {
       tone: "neutral",
       title: "自动刷新已开启",
-      detail: "等待首次执行"
+      detail: "等待首次执行",
+      nextRun: info.nextRunAt ? ("下次预计 " + info.nextRunAt) : ""
     };
   }
 
@@ -237,14 +240,16 @@ var autoRefreshFooter = computed(function () {
     return {
       tone: "danger",
       title: "最近失败 " + info.lastRunAt,
-      detail: info.lastMessage || "自动刷新执行失败"
+      detail: info.lastMessage || "自动刷新执行失败",
+      nextRun: info.nextRunAt ? ("下次预计 " + info.nextRunAt) : ""
     };
   }
 
   return {
     tone: "success",
     title: "最近成功 " + info.lastRunAt,
-    detail: info.lastMessage || "自动刷新执行成功"
+    detail: info.lastMessage || "自动刷新执行成功",
+    nextRun: info.nextRunAt ? ("下次预计 " + info.nextRunAt) : ""
   };
 });
 
@@ -371,6 +376,7 @@ onMounted(function () {
         <div class="auto-refresh-footer" :class="'tone-' + autoRefreshFooter.tone">
           <strong>{{ autoRefreshFooter.title }}</strong>
           <span>{{ autoRefreshFooter.detail }}</span>
+          <span v-if="autoRefreshFooter.nextRun" class="auto-refresh-next">{{ autoRefreshFooter.nextRun }}</span>
         </div>
       </div>
     </aside>
@@ -718,6 +724,10 @@ onMounted(function () {
   color: rgba(239, 244, 255, 0.72);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.auto-refresh-next {
+  color: rgba(239, 244, 255, 0.9);
 }
 
 .auto-refresh-footer.tone-success {

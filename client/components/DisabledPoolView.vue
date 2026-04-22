@@ -1,7 +1,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import UsageInlineStats from "./UsageInlineStats.vue";
-import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS } from "../lib/constants.js";
+import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS, POOL_SORT_MODES, POOL_SORT_OPTIONS } from "../lib/constants.js";
 import { fmt, isNum, sortItems } from "../lib/utils.js";
 
 var props = defineProps({
@@ -18,10 +18,12 @@ var props = defineProps({
 var filters = reactive({
   search: "",
   category: "all",
-  remain: "all"
+  remain: "all",
+  sortMode: POOL_SORT_MODES.DEFAULT
 });
 var pageSize = ref(DEFAULT_PAGE_SIZE);
 var currentPage = ref(1);
+var sortOptions = POOL_SORT_OPTIONS;
 
 function quotaLeft(item) {
   var values = [];
@@ -101,9 +103,15 @@ var sourceItems = computed(function () {
 });
 
 var filteredItems = computed(function () {
-  return sourceItems.value.filter(function (item) {
+  var items = sourceItems.value.filter(function (item) {
     return matchesSearch(item) && matchesCategory(item) && matchesRemain(item);
-  }).sort(function (a, b) {
+  });
+
+  if (filters.sortMode === POOL_SORT_MODES.SESSION_RESET_ASC) {
+    return sortItems(items, filters.sortMode);
+  }
+
+  return items.sort(function (a, b) {
     var aLeft = quotaLeft(a);
     var bLeft = quotaLeft(b);
     if (aLeft == null && bLeft == null) {
@@ -346,6 +354,13 @@ function warningRemainText() {
           <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ pageSizeText(size) }}</option>
         </select>
       </label>
+
+      <label class="field compact">
+        <span>排序方式</span>
+        <select v-model="filters.sortMode" class="select-input">
+          <option v-for="option in sortOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
+      </label>
     </article>
 
     <section class="surface-card table-shell">
@@ -488,7 +503,7 @@ function warningRemainText() {
 
 .control-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) repeat(3, minmax(150px, 0.28fr));
+  grid-template-columns: minmax(0, 1.2fr) repeat(4, minmax(140px, 0.24fr));
   gap: 10px;
   align-items: end;
 }

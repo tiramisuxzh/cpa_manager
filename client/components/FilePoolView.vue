@@ -1,7 +1,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import UsageInlineStats from "./UsageInlineStats.vue";
-import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS } from "../lib/constants.js";
+import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS, POOL_SORT_MODES, POOL_SORT_OPTIONS } from "../lib/constants.js";
 import { fmt, isNum, sortItems } from "../lib/utils.js";
 
 var props = defineProps({
@@ -18,7 +18,8 @@ var props = defineProps({
 var filters = reactive({
   search: "",
   status: "all",
-  category: "all"
+  category: "all",
+  sortMode: POOL_SORT_MODES.DEFAULT
 });
 var ui = reactive({
   dragActive: false
@@ -88,8 +89,9 @@ function matchesCategory(item) {
 var filteredItems = computed(function () {
   return sortItems(props.consoleApp.state.items.filter(function (item) {
     return matchesSearch(item) && matchesStatus(item) && matchesCategory(item);
-  }));
+  }), filters.sortMode);
 });
+var sortOptions = POOL_SORT_OPTIONS;
 
 var totalPages = computed(function () {
   return Math.max(1, Math.ceil(filteredItems.value.length / pageSize.value));
@@ -359,6 +361,13 @@ function pageSizeText(size) {
           <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ pageSizeText(size) }}</option>
         </select>
       </label>
+
+      <label class="field compact">
+        <span>排序方式</span>
+        <select v-model="filters.sortMode" class="select-input">
+          <option v-for="option in sortOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
+      </label>
     </article>
 
     <section class="surface-card table-shell">
@@ -532,7 +541,7 @@ function pageSizeText(size) {
 
 .control-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) repeat(3, minmax(150px, 0.28fr));
+  grid-template-columns: minmax(0, 1.2fr) repeat(4, minmax(140px, 0.24fr));
   gap: 10px;
   align-items: end;
 }

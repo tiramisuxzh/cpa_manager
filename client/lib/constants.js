@@ -7,6 +7,14 @@ export const FIVE_HOUR = 18000;
 export const WEEK = 604800;
 export const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 export const DEFAULT_PAGE_SIZE = 50;
+export const POOL_SORT_MODES = {
+  DEFAULT: "default",
+  SESSION_RESET_ASC: "session-reset-asc"
+};
+export const POOL_SORT_OPTIONS = [
+  { value: POOL_SORT_MODES.DEFAULT, label: "默认排序" },
+  { value: POOL_SORT_MODES.SESSION_RESET_ASC, label: "会话重置最早优先" }
+];
 export const AUTO_REFRESH_MODES = {
   FILES: "files",
   FILES_AND_QUOTAS: "files-and-quotas"

@@ -63,6 +63,11 @@ function autoRefreshModeLabel(mode) {
   return "只文件";
 }
 
+function futureTimeText(intervalMinutes) {
+  var minutes = Math.max(1, parseInt(intervalMinutes, 10) || 10);
+  return new Date(Date.now() + minutes * 60 * 1000).toLocaleString("zh-CN", { hour12: false });
+}
+
 function extractServiceValue(payload, keys) {
   var keyList = Array.isArray(keys) ? keys : [];
   var preferredKeys = keyList.concat(["value", "enabled", "data", "result"]);
@@ -309,7 +314,8 @@ export function useManagementConsole() {
       running: false,
       lastRunAt: "",
       lastResult: "idle",
-      lastMessage: ""
+      lastMessage: "",
+      nextRunAt: ""
     }
   });
   var ui = reactive({
@@ -423,6 +429,15 @@ export function useManagementConsole() {
     return new Date().toLocaleString("zh-CN", { hour12: false });
   }
 
+  function updateAutoRefreshNextRun(intervalMinutes) {
+    state.autoRefreshInfo.nextRunAt = futureTimeText(intervalMinutes);
+  }
+
+  function clearAutoRefreshInfo() {
+    state.autoRefreshInfo.running = false;
+    state.autoRefreshInfo.nextRunAt = "";
+  }
+
   // 自动刷新默认是静默执行，这里单独维护最近一次运行结果，方便在左下角状态区排查是否真的触发过。
   function markAutoRefreshRunning(options) {
     if (!isAutoRefreshTrigger(options)) {
@@ -441,6 +456,7 @@ export function useManagementConsole() {
     state.autoRefreshInfo.lastRunAt = nowText();
     state.autoRefreshInfo.lastResult = "success";
     state.autoRefreshInfo.lastMessage = autoRefreshModeLabel(options.autoRefreshMode) + " 已完成自动同步";
+    updateAutoRefreshNextRun(options.autoRefreshInterval);
   }
 
   function markAutoRefreshFailure(options, error) {
@@ -454,6 +470,7 @@ export function useManagementConsole() {
     state.autoRefreshInfo.lastMessage = error && error.message
       ? error.message
       : (autoRefreshModeLabel(options.autoRefreshMode) + " 自动同步失败");
+    updateAutoRefreshNextRun(options.autoRefreshInterval);
   }
 
   function currentClassifierOptions() {
@@ -1335,13 +1352,18 @@ export function useManagementConsole() {
 
     clearAutoRefreshTimer();
     if (!currentSettings.autoRefresh) {
+      clearAutoRefreshInfo();
       if (!options || !options.silent) {
         log("自动刷新已关闭。");
       }
       return;
     }
 
+    // 每次重建定时器都先把下一次计划执行时间写出来，避免用户只能看到“已开启”却不知道还要等多久。
+    updateAutoRefreshNextRun(currentSettings.interval);
+
     autoRefreshTimer = setInterval(function () {
+      updateAutoRefreshNextRun(currentSettings.interval);
       if (!state.busy) {
         if (currentSettings.autoRefreshMode === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
           // 自动刷新走“文件 + 额度”时，只补齐用户关心的两类数据，不额外触发 usage 明细同步。
@@ -1351,7 +1373,8 @@ export function useManagementConsole() {
             silentErrorToast: true,
             silentLog: true,
             triggerSource: "auto-refresh",
-            autoRefreshMode: currentSettings.autoRefreshMode
+            autoRefreshMode: currentSettings.autoRefreshMode,
+            autoRefreshInterval: currentSettings.interval
           });
           return;
         }
@@ -1361,7 +1384,8 @@ export function useManagementConsole() {
           silentErrorToast: true,
           silentLog: true,
           triggerSource: "auto-refresh",
-          autoRefreshMode: currentSettings.autoRefreshMode
+          autoRefreshMode: currentSettings.autoRefreshMode,
+          autoRefreshInterval: currentSettings.interval
         });
       }
     }, currentSettings.interval * 60 * 1000);

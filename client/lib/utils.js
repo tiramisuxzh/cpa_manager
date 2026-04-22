@@ -1,4 +1,4 @@
-import { FIVE_HOUR, WEEK } from "./constants.js";
+import { FIVE_HOUR, POOL_SORT_MODES, WEEK } from "./constants.js";
 
 export function now() {
   return new Date().toLocaleString("zh-CN", { hour12: false });
@@ -122,23 +122,54 @@ export function selectWindow(limit) {
   };
 }
 
-export function sortItems(list) {
-  return list.slice().sort(function (a, b) {
-    var toneWeight = { bad: 0, warn: 1, good: 2 };
-    if (toneWeight[a.tone] !== toneWeight[b.tone]) {
-      return toneWeight[a.tone] - toneWeight[b.tone];
-    }
-    var aRemaining = Math.min(
-      isNum(a.chatQuota && a.chatQuota.left) ? a.chatQuota.left : 101,
-      isNum(a.codeQuota && a.codeQuota.left) ? a.codeQuota.left : 101
-    );
-    var bRemaining = Math.min(
-      isNum(b.chatQuota && b.chatQuota.left) ? b.chatQuota.left : 101,
-      isNum(b.codeQuota && b.codeQuota.left) ? b.codeQuota.left : 101
-    );
-    if (aRemaining !== bRemaining) {
-      return aRemaining - bRemaining;
-    }
-    return (a.email || "").localeCompare(b.email || "");
-  });
+function defaultItemComparator(a, b) {
+  var toneWeight = { bad: 0, warn: 1, good: 2 };
+  var aTone = toneWeight[a.tone] != null ? toneWeight[a.tone] : 99;
+  var bTone = toneWeight[b.tone] != null ? toneWeight[b.tone] : 99;
+  var aRemaining = Math.min(
+    isNum(a.chatQuota && a.chatQuota.left) ? a.chatQuota.left : 101,
+    isNum(a.codeQuota && a.codeQuota.left) ? a.codeQuota.left : 101
+  );
+  var bRemaining = Math.min(
+    isNum(b.chatQuota && b.chatQuota.left) ? b.chatQuota.left : 101,
+    isNum(b.codeQuota && b.codeQuota.left) ? b.codeQuota.left : 101
+  );
+
+  if (aTone !== bTone) {
+    return aTone - bTone;
+  }
+  if (aRemaining !== bRemaining) {
+    return aRemaining - bRemaining;
+  }
+  return (a.email || "").localeCompare(b.email || "");
+}
+
+export function sessionResetTimeValue(item) {
+  var sessionReset = parseDate(item && item.chatQuota ? item.chatQuota.resetAt : null);
+  return sessionReset ? sessionReset.getTime() : null;
+}
+
+function sessionResetComparator(a, b) {
+  var aReset = sessionResetTimeValue(a);
+  var bReset = sessionResetTimeValue(b);
+
+  if (aReset == null && bReset == null) {
+    return defaultItemComparator(a, b);
+  }
+  if (aReset == null) {
+    return 1;
+  }
+  if (bReset == null) {
+    return -1;
+  }
+  if (aReset !== bReset) {
+    return aReset - bReset;
+  }
+  return defaultItemComparator(a, b);
+}
+
+// 列表默认仍按风险和剩余额度优先；只有用户显式切到会话重置排序时，才把最早重置的账号提到前面。
+export function sortItems(list, sortMode) {
+  var mode = sortMode || POOL_SORT_MODES.DEFAULT;
+  return list.slice().sort(mode === POOL_SORT_MODES.SESSION_RESET_ASC ? sessionResetComparator : defaultItemComparator);
 }

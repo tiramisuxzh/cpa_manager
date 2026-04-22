@@ -35,6 +35,18 @@ var filters = reactive({
 });
 var pageSize = ref(DEFAULT_PAGE_SIZE);
 var currentPage = ref(1);
+var summaryDetailVisible = ref(false);
+
+var FILE_SUMMARY_CARD_DEFINITIONS = [
+  { label: "请求数", key: "totalRequests", tone: "neutral" },
+  { label: "成功", key: "successCount", tone: "success" },
+  { label: "失败", key: "failureCount", tone: "danger" },
+  { label: "输入 Tokens", key: "inputTokens", tone: "info" },
+  { label: "输出 Tokens", key: "outputTokens", tone: "info" },
+  { label: "思考 Tokens", key: "reasoningTokens", tone: "warn" },
+  { label: "缓存 Tokens", key: "cachedTokens", tone: "violet" },
+  { label: "总 Tokens", key: "totalTokens", tone: "warn" }
+];
 
 var connectionReady = computed(function () {
   return !!String(props.consoleApp.settings.baseUrl || "").trim() && !!String(props.consoleApp.settings.key || "").trim();
@@ -110,6 +122,39 @@ function uniqueOptions(key) {
   }, []).sort(function (left, right) {
     return left.label.localeCompare(right.label, "zh-CN");
   });
+}
+
+function uniqueValues(list) {
+  var seen = {};
+
+  return list.reduce(function (result, value) {
+    var text = String(value || "").trim();
+    if (!text || seen[text]) {
+      return result;
+    }
+    seen[text] = true;
+    result.push(text);
+    return result;
+  }, []);
+}
+
+function sumTokenField(list, key) {
+  return list.reduce(function (total, item) {
+    return total + Number(item && item[key] ? item[key] : 0);
+  }, 0);
+}
+
+function eventIdentity(item) {
+  if (item && item.authIndex) {
+    return "authIndex::" + String(item.authIndex).trim();
+  }
+  if (item && item.fileName) {
+    return "fileName::" + String(item.fileName).trim();
+  }
+  if (item && item.email) {
+    return "email::" + String(item.email).trim();
+  }
+  return "";
 }
 
 var modelOptions = computed(function () {
@@ -203,6 +248,67 @@ var filteredEvents = computed(function () {
   return usageCenter.value.events.filter(matchesEvent);
 });
 
+var singleFileSummary = computed(function () {
+  var events = filteredEvents.value;
+  var identities;
+  var sample;
+  var resolvedAuthIndex;
+  var resolvedFileName;
+  var resolvedEmail;
+  var latestEvent;
+  var oldestEvent;
+  var summaryValueMap;
+
+  if (!events.length) {
+    return null;
+  }
+
+  // 用户已经显式选了认证索引时，说明页面上下文就是“这个文件”，这里直接展示汇总，不再额外猜测。
+  if (filters.authIndex === "all") {
+    identities = uniqueValues(events.map(eventIdentity));
+    if (identities.length !== 1) {
+      return null;
+    }
+  }
+
+  sample = events[0] || {};
+  resolvedAuthIndex = String(filters.authIndex !== "all" ? filters.authIndex : (sample.authIndex || "")).trim();
+  resolvedFileName = String(sample.fileName || "").trim();
+  resolvedEmail = String(sample.email || "").trim();
+  latestEvent = events.reduce(function (current, item) {
+    return timestampValue(item.timestamp) > timestampValue(current.timestamp) ? item : current;
+  }, events[0]);
+  oldestEvent = events.reduce(function (current, item) {
+    return timestampValue(item.timestamp) < timestampValue(current.timestamp) ? item : current;
+  }, events[0]);
+  summaryValueMap = {
+    totalRequests: events.length,
+    successCount: events.filter(function (item) { return item.resultCode === "success"; }).length,
+    failureCount: events.filter(function (item) { return item.resultCode === "failure"; }).length,
+    inputTokens: sumTokenField(events, "inputTokens"),
+    outputTokens: sumTokenField(events, "outputTokens"),
+    reasoningTokens: sumTokenField(events, "reasoningTokens"),
+    cachedTokens: sumTokenField(events, "cachedTokens"),
+    totalTokens: sumTokenField(events, "totalTokens")
+  };
+
+  return {
+    title: resolvedFileName || resolvedEmail || resolvedAuthIndex || "当前筛选对象",
+    subtitle: [
+      resolvedEmail && resolvedEmail !== resolvedFileName ? resolvedEmail : "",
+      resolvedAuthIndex ? ("认证索引 " + resolvedAuthIndex) : ""
+    ].filter(Boolean).join(" · "),
+    rangeText: "统计范围 " + fmt(oldestEvent.timestamp, true) + " 至 " + fmt(latestEvent.timestamp, true),
+    cards: FILE_SUMMARY_CARD_DEFINITIONS.map(function (definition) {
+      return {
+        label: definition.label,
+        tone: definition.tone,
+        value: numberText(summaryValueMap[definition.key])
+      };
+    })
+  };
+});
+
 var totalPages = computed(function () {
   return Math.max(1, Math.ceil(filteredEvents.value.length / pageSize.value));
 });
@@ -241,8 +347,27 @@ watch(function () {
   currentPage.value = Math.max(1, Math.min(currentPage.value, totalPages.value));
 });
 
+watch(function () {
+  return !!singleFileSummary.value;
+}, function (visible) {
+  if (!visible) {
+    summaryDetailVisible.value = false;
+  }
+});
+
 function pageChange(nextPage) {
   currentPage.value = Math.max(1, Math.min(nextPage, totalPages.value));
+}
+
+function openSummaryDetail() {
+  if (!singleFileSummary.value) {
+    return;
+  }
+  summaryDetailVisible.value = true;
+}
+
+function closeSummaryDetail() {
+  summaryDetailVisible.value = false;
 }
 
 function clearFilters() {
@@ -448,7 +573,10 @@ function emptyBody() {
           <strong>筛选与时间范围</strong>
           <p>{{ activeFilterSummary }}</p>
         </div>
-        <small>时间范围基于当前已拉取的事件时间戳做前端过滤。</small>
+        <div class="filter-head-actions">
+          <button v-if="singleFileSummary" class="secondary-btn" type="button" @click="openSummaryDetail">汇总详情</button>
+          <small>时间范围基于当前已拉取的事件时间戳做前端过滤。</small>
+        </div>
       </div>
 
       <div class="filter-grid">
@@ -539,22 +667,22 @@ function emptyBody() {
 
       <div v-if="pagedEvents.length" class="table-body">
         <article v-for="item in pagedEvents" :key="item.id" class="table-row">
-          <div class="row-cell">
+          <div class="row-cell time-row-cell">
             <strong>{{ fmt(item.timestamp, true) }}</strong>
             <span>{{ item.apiLabel || "usage" }}</span>
           </div>
 
-          <div class="row-cell">
+          <div class="row-cell text-row-cell">
             <strong>{{ item.model || "--" }}</strong>
             <span>{{ item.fileName || item.email || "未匹配到文件" }}</span>
           </div>
 
-          <div class="row-cell">
+          <div class="row-cell text-row-cell">
             <strong>{{ item.source || "--" }}</strong>
             <span>{{ item.email || item.fileName || "来源未附带账号" }}</span>
           </div>
 
-          <div class="row-cell">
+          <div class="row-cell text-row-cell">
             <strong>{{ item.authIndex || "--" }}</strong>
             <span>{{ item.fileName || "未匹配文件名" }}</span>
           </div>
@@ -599,6 +727,38 @@ function emptyBody() {
         <button class="mini-btn" type="button" :disabled="currentPage >= totalPages" @click="pageChange(currentPage + 1)">下一页</button>
       </div>
     </footer>
+
+    <transition name="summary-fade">
+      <div v-if="summaryDetailVisible && singleFileSummary" class="summary-mask" @click.self="closeSummaryDetail">
+        <aside class="summary-panel">
+          <header class="summary-panel-header">
+            <div class="summary-panel-copy">
+              <span class="section-kicker">Focused File</span>
+              <strong>当前文件统计</strong>
+              <p>{{ singleFileSummary.title }}</p>
+              <small v-if="singleFileSummary.subtitle">{{ singleFileSummary.subtitle }}</small>
+            </div>
+            <button class="ghost-btn" type="button" @click="closeSummaryDetail">关闭</button>
+          </header>
+
+          <div class="summary-panel-meta">
+            <span>{{ singleFileSummary.rangeText }}</span>
+          </div>
+
+          <div class="summary-panel-grid">
+            <article
+              v-for="card in singleFileSummary.cards"
+              :key="card.label"
+              class="summary-stat-card"
+              :class="'tone-' + card.tone"
+            >
+              <span>{{ card.label }}</span>
+              <strong>{{ card.value }}</strong>
+            </article>
+          </div>
+        </aside>
+      </div>
+    </transition>
   </section>
 </template>
 
@@ -691,6 +851,13 @@ function emptyBody() {
   gap: 6px;
 }
 
+.filter-head-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .section-kicker {
   color: var(--text-muted);
   font-size: 11px;
@@ -732,7 +899,7 @@ function emptyBody() {
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) minmax(190px, 1fr) minmax(150px, 0.9fr) 90px repeat(5, minmax(110px, 0.8fr));
+  grid-template-columns: minmax(150px, 0.95fr) minmax(170px, 0.95fr) minmax(180px, 1fr) minmax(160px, 1fr) 90px repeat(5, minmax(105px, 0.72fr));
   gap: 12px;
   align-items: center;
 }
@@ -766,18 +933,39 @@ function emptyBody() {
   display: grid;
   gap: 4px;
   min-width: 0;
+  align-content: start;
 }
 
 .row-cell strong {
   color: var(--text-strong);
   font-size: 13px;
   line-height: 1.45;
+  min-width: 0;
 }
 
 .row-cell span {
   color: var(--text-soft);
   font-size: 12px;
   line-height: 1.55;
+  min-width: 0;
+}
+
+.time-row-cell strong,
+.token-cell strong {
+  white-space: nowrap;
+}
+
+.text-row-cell strong,
+.text-row-cell span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.text-row-cell span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .token-cell strong {
@@ -830,6 +1018,103 @@ function emptyBody() {
   flex-wrap: wrap;
 }
 
+.summary-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(6px);
+}
+
+.summary-panel {
+  width: min(560px, 100vw);
+  height: 100%;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  border-left: 1px solid var(--line-soft);
+  box-shadow: -24px 0 60px rgba(15, 23, 42, 0.12);
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  overflow: auto;
+}
+
+.summary-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.summary-panel-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.summary-panel-copy strong {
+  margin: 0;
+  font-family: var(--font-display);
+  color: var(--ink-strong);
+  letter-spacing: -0.04em;
+}
+
+.summary-panel-copy p,
+.summary-panel-copy small,
+.summary-panel-meta span {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.summary-panel-meta {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(22, 119, 255, 0.06);
+  border: 1px solid rgba(22, 119, 255, 0.12);
+}
+
+.summary-panel-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.summary-stat-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.summary-stat-card span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.summary-stat-card strong {
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.summary-fade-enter-active,
+.summary-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.summary-fade-enter-from,
+.summary-fade-leave-to {
+  opacity: 0;
+}
+
 @media (max-width: 1680px) {
   .filter-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -851,6 +1136,16 @@ function emptyBody() {
     grid-template-columns: 1fr;
   }
 
+  .filter-head-actions,
+  .summary-panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .summary-panel-grid {
+    grid-template-columns: 1fr;
+  }
+
   .table-shell {
     overflow: visible;
   }
@@ -865,6 +1160,11 @@ function emptyBody() {
 
   .table-row {
     grid-template-columns: 1fr;
+  }
+
+  .time-row-cell strong,
+  .token-cell strong {
+    white-space: normal;
   }
 }
 </style>
