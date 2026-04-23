@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { PENDING_GROUPS } from "../lib/constants.js";
-import { fmt, isNum } from "../lib/utils.js";
+import { fmt, quotaMetricCards, quotaResetText } from "../lib/utils.js";
 
 var props = defineProps({
   item: {
@@ -57,10 +57,13 @@ var detailRows = computed(function () {
     ["账号类型", props.item.accountType || "未标注"],
     ["异常分类", props.item.badReasonLabel || (props.item.tone === "warn" ? props.item.quotaStateLabel : "无")],
     ["文件开关", props.item.disabled ? "已停用" : "启用中"],
-    ["会话重置", props.item.chatQuota && props.item.chatQuota.resetAt ? fmt(props.item.chatQuota.resetAt, true) : "等待返回"],
-    ["代码重置", props.item.codeQuota && props.item.codeQuota.resetAt ? fmt(props.item.codeQuota.resetAt, true) : "等待返回"],
+    ["额度重置", quotaResetText(props.item, true, " / ")],
     ["最近刷新", fmt(props.item.lastRefresh || props.item.updatedAt, true)]
   ];
+});
+
+var quotaCards = computed(function () {
+  return props.item ? quotaMetricCards(props.item) : [];
 });
 
 var advice = computed(function () {
@@ -214,15 +217,10 @@ function deleteDisabled() {
             </div>
 
             <div class="metric-grid">
-              <article class="metric-box">
-                <small>会话剩余</small>
-                <strong>{{ item.chatQuota && isNum(item.chatQuota.left) ? item.chatQuota.left + "%" : "--" }}</strong>
-                <span>{{ item.chatQuota && item.chatQuota.resetAt ? fmt(item.chatQuota.resetAt, true) : "等待返回" }}</span>
-              </article>
-              <article class="metric-box">
-                <small>代码剩余</small>
-                <strong>{{ item.codeQuota && isNum(item.codeQuota.left) ? item.codeQuota.left + "%" : "--" }}</strong>
-                <span>{{ item.codeQuota && item.codeQuota.resetAt ? fmt(item.codeQuota.resetAt, true) : "等待返回" }}</span>
+              <article v-for="card in quotaCards" :key="card.key" class="metric-box">
+                <small>{{ card.title }}</small>
+                <strong>{{ card.value }}</strong>
+                <span>{{ card.subtitle }}</span>
               </article>
               <article class="metric-box success-box">
                 <small>Usage 成功</small>

@@ -7,6 +7,7 @@ export const FIVE_HOUR = 18000;
 export const WEEK = 604800;
 export const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 export const DEFAULT_PAGE_SIZE = 50;
+export const EMPTY_PLAN_TYPE_FILTER = "__empty_plan_type__";
 export const POOL_SORT_MODES = {
   DEFAULT: "default",
   SESSION_RESET_ASC: "session-reset-asc"

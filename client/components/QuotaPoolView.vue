@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import UsageInlineStats from "./UsageInlineStats.vue";
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS, POOL_SORT_MODES, POOL_SORT_OPTIONS } from "../lib/constants.js";
-import { fmt, isNum, sortItems } from "../lib/utils.js";
+import { buildPlanTypeOptions, fmt, planTypeFilterValue, quotaHintText, quotaLeft as quotaLeftValue, quotaResetText, quotaText, sortItems } from "../lib/utils.js";
 
 var props = defineProps({
   consoleApp: {
@@ -19,6 +19,7 @@ var filters = reactive({
   search: "",
   state: "all",
   remain: "all",
+  planType: "all",
   sortMode: POOL_SORT_MODES.DEFAULT
 });
 var pageSize = ref(DEFAULT_PAGE_SIZE);
@@ -26,17 +27,7 @@ var currentPage = ref(1);
 var sortOptions = POOL_SORT_OPTIONS;
 
 function quotaLeft(item) {
-  var values = [];
-  if (item.chatQuota && isNum(item.chatQuota.left)) {
-    values.push(item.chatQuota.left);
-  }
-  if (item.codeQuota && isNum(item.codeQuota.left)) {
-    values.push(item.codeQuota.left);
-  }
-  if (!values.length) {
-    return null;
-  }
-  return Math.min.apply(Math, values);
+  return quotaLeftValue(item);
 }
 
 function matchesSearch(item) {
@@ -85,12 +76,25 @@ function matchesRemain(item) {
   return true;
 }
 
+function matchesPlanType(item) {
+  if (filters.planType === "all") {
+    return true;
+  }
+  return planTypeFilterValue(item) === filters.planType;
+}
+
+var planTypeOptions = computed(function () {
+  return buildPlanTypeOptions(props.consoleApp.state.items.filter(function (item) {
+    return !item.disabled;
+  }));
+});
+
 var filteredItems = computed(function () {
   var items = props.consoleApp.state.items.filter(function (item) {
     if (item.disabled) {
       return false;
     }
-    return matchesSearch(item) && matchesState(item) && matchesRemain(item);
+    return matchesSearch(item) && matchesState(item) && matchesRemain(item) && matchesPlanType(item);
   });
 
   if (filters.sortMode === POOL_SORT_MODES.SESSION_RESET_ASC) {
@@ -217,25 +221,6 @@ function actionAdvice(item) {
   return item.tone === "warn" ? "建议优先观察" : "当前可继续使用";
 }
 
-function quotaCell(item, field) {
-  var quota = field === "chat" ? item.chatQuota : item.codeQuota;
-  if (!quota || !isNum(quota.left)) {
-    return "--";
-  }
-  return quota.left + "%";
-}
-
-function resetText(item) {
-  var dates = [];
-  if (item.chatQuota && item.chatQuota.resetAt) {
-    dates.push(fmt(item.chatQuota.resetAt, false));
-  }
-  if (item.codeQuota && item.codeQuota.resetAt) {
-    dates.push(fmt(item.codeQuota.resetAt, false));
-  }
-  return dates.length ? dates.join(" / ") : "等待返回";
-}
-
 function pageSizeText(size) {
   return size + " / 页";
 }
@@ -314,6 +299,14 @@ function warningRemainText() {
       </label>
 
       <label class="field compact">
+        <span>套餐类型</span>
+        <select v-model="filters.planType" class="select-input">
+          <option value="all">全部套餐</option>
+          <option v-for="option in planTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
+      </label>
+
+      <label class="field compact">
         <span>每页条数</span>
         <select v-model.number="pageSize" class="select-input">
           <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ pageSizeText(size) }}</option>
@@ -335,7 +328,7 @@ function warningRemainText() {
         </label>
         <span>账号 / 文件</span>
         <span>状态与建议</span>
-        <span>会话 / 代码额度</span>
+        <span>额度窗口</span>
         <span>重置时间 / Usage</span>
         <span class="align-right">操作</span>
       </header>
@@ -364,12 +357,12 @@ function warningRemainText() {
           </div>
 
           <div class="row-cell metric-cell">
-            <strong>会话 {{ quotaCell(item, "chat") }} · 代码 {{ quotaCell(item, "code") }}</strong>
-            <span>{{ item.chatQuota && item.chatQuota.label ? item.chatQuota.label : "等待窗口返回" }}</span>
+            <strong>{{ quotaText(item) }}</strong>
+            <span>{{ quotaHintText(item) }}</span>
           </div>
 
           <div class="row-cell time-cell">
-            <strong>{{ resetText(item) }}</strong>
+            <strong>{{ quotaResetText(item, false, " / ") }}</strong>
             <div class="usage-stack">
               <span>{{ item.requestStatusText }}</span>
               <UsageInlineStats :success="item.usageSuccessCount" :failure="item.usageFailureCount" />
@@ -468,7 +461,7 @@ function warningRemainText() {
 
 .control-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) repeat(4, minmax(140px, 0.24fr));
+  grid-template-columns: minmax(0, 1.2fr) repeat(5, minmax(132px, 0.22fr));
   gap: 10px;
   align-items: end;
 }

@@ -537,6 +537,7 @@ export function useManagementConsole() {
       quotaStateCode: previousItem.quotaStateCode || "idle",
       quotaStateLabel: previousItem.quotaStateLabel || "等待额度",
       chatQuota: previousItem.chatQuota || null,
+      chatQuotaSecondary: previousItem.chatQuotaSecondary || null,
       codeQuota: previousItem.codeQuota || null,
       rawQuotaMessage: previousItem.rawQuotaMessage || "",
       usageSuccessCount: previousItem.usageSuccessCount == null ? null : previousItem.usageSuccessCount,

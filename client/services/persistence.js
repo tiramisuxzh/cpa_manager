@@ -38,6 +38,7 @@ function snapshotItem(item) {
     quotaStateCode: item.quotaStateCode || "idle",
     quotaStateLabel: item.quotaStateLabel || "等待额度",
     chatQuota: item.chatQuota || null,
+    chatQuotaSecondary: item.chatQuotaSecondary || null,
     codeQuota: item.codeQuota || null,
     rawQuotaMessage: item.rawQuotaMessage || "",
     usageSuccessCount: item.usageSuccessCount == null ? null : item.usageSuccessCount,

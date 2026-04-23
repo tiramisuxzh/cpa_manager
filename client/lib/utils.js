@@ -1,4 +1,4 @@
-import { FIVE_HOUR, POOL_SORT_MODES, WEEK } from "./constants.js";
+import { EMPTY_PLAN_TYPE_FILTER, FIVE_HOUR, POOL_SORT_MODES, WEEK } from "./constants.js";
 
 export function now() {
   return new Date().toLocaleString("zh-CN", { hour12: false });
@@ -103,17 +103,21 @@ export function classify(limit) {
   return out;
 }
 
-export function selectWindow(limit) {
-  var classified = classify(limit);
-  var windowValue = classified.weekly || classified.primary || classified.secondary || null;
+function normalizeWindow(windowValue) {
+  var seconds;
+  var used;
+  var left;
+
   if (!windowValue) {
     return null;
   }
-  var seconds = toNum(
+
+  seconds = toNum(
     windowValue.limit_window_seconds != null ? windowValue.limit_window_seconds : windowValue.limitWindowSeconds
   );
-  var used = clamp(windowValue.used_percent != null ? windowValue.used_percent : windowValue.usedPercent);
-  var left = used == null ? null : clamp(100 - used);
+  used = clamp(windowValue.used_percent != null ? windowValue.used_percent : windowValue.usedPercent);
+  left = used == null ? null : clamp(100 - used);
+
   return {
     label: seconds === WEEK ? "周窗口" : (seconds === FIVE_HOUR ? "5 小时窗口" : "主窗口"),
     used: used,
@@ -122,31 +126,213 @@ export function selectWindow(limit) {
   };
 }
 
+export function selectWindow(limit) {
+  var classified = classify(limit);
+  var windowValue = classified.primary || classified.weekly || classified.secondary || null;
+  return normalizeWindow(windowValue);
+}
+
+export function selectSecondaryWindow(limit) {
+  var classified = classify(limit);
+  var windowValue = null;
+
+  if (classified.secondary && classified.secondary !== classified.primary) {
+    windowValue = classified.secondary;
+  } else if (classified.weekly && classified.weekly !== classified.primary) {
+    windowValue = classified.weekly;
+  }
+
+  return normalizeWindow(windowValue);
+}
+
+function quotaEntryTitle(item, quota, fallback) {
+  var planType = String(item && item.planType ? item.planType : "").trim().toLowerCase();
+  var sessionWindowPlanTypes = ["plus", "team", "tream"];
+
+  // plus / team 账号的会话额度都按“5 小时 + 周”两层窗口展示，标题不再沿用通用的“会话”文案。
+  if (sessionWindowPlanTypes.indexOf(planType) !== -1) {
+    if (quota && quota.label === "5 小时窗口") {
+      return "5 小时";
+    }
+    if (quota && quota.label === "周窗口") {
+      return "周";
+    }
+    return fallback || (quota && quota.label) || "窗口";
+  }
+
+  return fallback;
+}
+
+export function quotaEntries(item) {
+  var entries = [];
+
+  if (!item || typeof item !== "object") {
+    return entries;
+  }
+
+  if (item.chatQuota) {
+    entries.push({
+      key: "chat-primary",
+      title: quotaEntryTitle(item, item.chatQuota, "会话"),
+      quota: item.chatQuota
+    });
+  }
+  if (item.chatQuotaSecondary) {
+    entries.push({
+      key: "chat-secondary",
+      title: quotaEntryTitle(item, item.chatQuotaSecondary, "周"),
+      quota: item.chatQuotaSecondary
+    });
+  }
+  if (item.codeQuota) {
+    entries.push({
+      key: "code",
+      title: "代码",
+      quota: item.codeQuota
+    });
+  }
+
+  return entries;
+}
+
+export function quotaLeft(item) {
+  var values = quotaEntries(item).map(function (entry) {
+    return isNum(entry.quota && entry.quota.left) ? entry.quota.left : null;
+  }).filter(function (value) {
+    return value != null;
+  });
+
+  if (!values.length) {
+    return null;
+  }
+  return Math.min.apply(Math, values);
+}
+
+export function quotaText(item) {
+  var entries = quotaEntries(item);
+
+  if (!entries.length) {
+    return "等待额度返回";
+  }
+
+  return entries.map(function (entry) {
+    return entry.title + " " + (isNum(entry.quota && entry.quota.left) ? (entry.quota.left + "%") : "--");
+  }).join(" · ");
+}
+
+export function quotaResetText(item, full, joiner) {
+  var entries = quotaEntries(item);
+  var separator = joiner || " · ";
+  var values = entries.reduce(function (result, entry) {
+    if (entry.quota && entry.quota.resetAt) {
+      result.push(entry.title + " " + fmt(entry.quota.resetAt, !!full));
+    }
+    return result;
+  }, []);
+
+  return values.length ? values.join(separator) : "等待返回";
+}
+
+export function quotaHintText(item) {
+  var entries = quotaEntries(item);
+
+  if (!entries.length) {
+    return "等待窗口返回";
+  }
+
+  return entries.map(function (entry) {
+    return entry.quota && entry.quota.label ? entry.quota.label : (entry.title + "窗口");
+  }).join(" / ");
+}
+
+export function quotaMetricCards(item) {
+  return quotaEntries(item).map(function (entry) {
+    return {
+      key: entry.key,
+      title: entry.title + "剩余",
+      value: isNum(entry.quota && entry.quota.left) ? (entry.quota.left + "%") : "--",
+      subtitle: entry.quota && entry.quota.resetAt ? fmt(entry.quota.resetAt, true) : "等待返回"
+    };
+  });
+}
+
+export function planTypeFilterValue(item) {
+  var value = String(item && item.planType ? item.planType : "").trim().toLowerCase();
+  return value || EMPTY_PLAN_TYPE_FILTER;
+}
+
+export function buildPlanTypeOptions(items) {
+  var seen = {};
+  var values = [];
+
+  (Array.isArray(items) ? items : []).forEach(function (item) {
+    var value = planTypeFilterValue(item);
+    if (seen[value]) {
+      return;
+    }
+    seen[value] = true;
+    values.push({
+      value: value,
+      label: value === EMPTY_PLAN_TYPE_FILTER ? "未标注" : value
+    });
+  });
+
+  return values.sort(function (left, right) {
+    if (left.value === EMPTY_PLAN_TYPE_FILTER) {
+      return 1;
+    }
+    if (right.value === EMPTY_PLAN_TYPE_FILTER) {
+      return -1;
+    }
+    return left.label.localeCompare(right.label, "zh-CN");
+  });
+}
+
+export function sessionQuotaValues(item) {
+  var values = [];
+  if (item && item.chatQuota && isNum(item.chatQuota.left)) {
+    values.push(item.chatQuota.left);
+  }
+  if (item && item.chatQuotaSecondary && isNum(item.chatQuotaSecondary.left)) {
+    values.push(item.chatQuotaSecondary.left);
+  }
+  return values;
+}
+
+export function sessionResetTimeValue(item) {
+  var timestamps = [];
+  var primaryReset = parseDate(item && item.chatQuota ? item.chatQuota.resetAt : null);
+  var secondaryReset = parseDate(item && item.chatQuotaSecondary ? item.chatQuotaSecondary.resetAt : null);
+
+  if (primaryReset) {
+    timestamps.push(primaryReset.getTime());
+  }
+  if (secondaryReset) {
+    timestamps.push(secondaryReset.getTime());
+  }
+
+  if (!timestamps.length) {
+    return null;
+  }
+  return Math.min.apply(Math, timestamps);
+}
+
 function defaultItemComparator(a, b) {
   var toneWeight = { bad: 0, warn: 1, good: 2 };
   var aTone = toneWeight[a.tone] != null ? toneWeight[a.tone] : 99;
   var bTone = toneWeight[b.tone] != null ? toneWeight[b.tone] : 99;
-  var aRemaining = Math.min(
-    isNum(a.chatQuota && a.chatQuota.left) ? a.chatQuota.left : 101,
-    isNum(a.codeQuota && a.codeQuota.left) ? a.codeQuota.left : 101
-  );
-  var bRemaining = Math.min(
-    isNum(b.chatQuota && b.chatQuota.left) ? b.chatQuota.left : 101,
-    isNum(b.codeQuota && b.codeQuota.left) ? b.codeQuota.left : 101
-  );
+  var aRemaining = quotaLeft(a);
+  var bRemaining = quotaLeft(b);
+  var aFallbackRemaining = aRemaining == null ? 101 : aRemaining;
+  var bFallbackRemaining = bRemaining == null ? 101 : bRemaining;
 
   if (aTone !== bTone) {
     return aTone - bTone;
   }
-  if (aRemaining !== bRemaining) {
-    return aRemaining - bRemaining;
+  if (aFallbackRemaining !== bFallbackRemaining) {
+    return aFallbackRemaining - bFallbackRemaining;
   }
   return (a.email || "").localeCompare(b.email || "");
-}
-
-export function sessionResetTimeValue(item) {
-  var sessionReset = parseDate(item && item.chatQuota ? item.chatQuota.resetAt : null);
-  return sessionReset ? sessionReset.getTime() : null;
 }
 
 function sessionResetComparator(a, b) {

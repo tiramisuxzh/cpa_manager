@@ -1,5 +1,5 @@
 import { FIVE_HOUR, WEEK } from "./constants.js";
-import { avg, isNum, now, parseBody, selectWindow } from "./utils.js";
+import { avg, isNum, now, parseBody, selectSecondaryWindow, selectWindow, sessionQuotaValues } from "./utils.js";
 
 var HTTP_OK = 200;
 var HTTP_UNAUTHORIZED = 401;
@@ -121,9 +121,12 @@ function quotaLimitReached(limit) {
   return readFlag(limit.allowed) === false || readFlag(limit.limit_reached) === true || readFlag(limit.limitReached) === true;
 }
 
-function lowQuotaSignals(chatQuota, codeQuota, threshold) {
+function lowQuotaSignals(chatQuota, chatQuotaSecondary, codeQuota, threshold) {
   return {
-    lowChat: !!(chatQuota && chatQuota.left != null && chatQuota.left <= threshold),
+    lowChat: !!(
+      (chatQuota && chatQuota.left != null && chatQuota.left <= threshold)
+      || (chatQuotaSecondary && chatQuotaSecondary.left != null && chatQuotaSecondary.left <= threshold)
+    ),
     lowCode: !!(codeQuota && codeQuota.left != null && codeQuota.left <= threshold)
   };
 }
@@ -143,14 +146,14 @@ function buildQuotaBadState(payload, chatBlocked, codeBlocked) {
     return {
       code: "quota-chat",
       label: "对话额度已用尽",
-      reason: "对话周额度已用尽，等待重置后恢复。"
+      reason: "对话额度已用尽，等待重置后恢复。"
     };
   }
   if (codeBlocked) {
     return {
       code: "quota-code",
       label: "代码审查额度已用尽",
-      reason: "代码审查周额度已用尽，等待重置后恢复。"
+      reason: "代码审查额度已用尽，等待重置后恢复。"
     };
   }
   if (spendControlReached) {
@@ -170,8 +173,8 @@ function buildQuotaBadState(payload, chatBlocked, codeBlocked) {
   return null;
 }
 
-function buildWarnState(chatQuota, codeQuota, threshold) {
-  var signals = lowQuotaSignals(chatQuota, codeQuota, threshold);
+function buildWarnState(chatQuota, chatQuotaSecondary, codeQuota, threshold) {
+  var signals = lowQuotaSignals(chatQuota, chatQuotaSecondary, codeQuota, threshold);
 
   if (signals.lowChat && signals.lowCode) {
     return {
@@ -184,14 +187,14 @@ function buildWarnState(chatQuota, codeQuota, threshold) {
     return {
       code: "warn-chat",
       label: "对话额度预警",
-      reason: "对话周额度低于等于预警阈值（<= " + threshold + "%）。"
+      reason: "对话额度低于等于预警阈值（<= " + threshold + "%）。"
     };
   }
   if (signals.lowCode) {
     return {
       code: "warn-code",
       label: "代码审查额度预警",
-      reason: "代码审查周额度低于等于预警阈值（<= " + threshold + "%）。"
+      reason: "代码审查额度低于等于预警阈值（<= " + threshold + "%）。"
     };
   }
   return null;
@@ -268,9 +271,9 @@ export function allQuotaLoaded(state) {
 
 export function averageSessionLeftPercent(state) {
   var usable = state.items.filter(function (item) {
-    return item.tone !== "bad" && item.chatQuota && isNum(item.chatQuota.left);
+    return item.tone !== "bad" && sessionQuotaValues(item).length;
   }).map(function (item) {
-    return item.chatQuota.left;
+    return Math.min.apply(Math, sessionQuotaValues(item));
   });
   return usable.length ? avg(usable) : null;
 }
@@ -302,6 +305,7 @@ export function baseItem(file, index) {
     quotaStateCode: "idle",
     quotaStateLabel: "等待额度",
     chatQuota: null,
+    chatQuotaSecondary: null,
     codeQuota: null,
     rawQuotaMessage: "",
     usageSuccessCount: null,
@@ -323,6 +327,7 @@ export function enrichItem(item, result, classifierOptions) {
   var chat = payload.rate_limit || payload.rateLimit || null;
   var code = payload.code_review_rate_limit || payload.codeReviewRateLimit || null;
   var chatQuota = selectWindow(chat);
+  var chatQuotaSecondary = selectSecondaryWindow(chat);
   var codeQuota = selectWindow(code);
   var chatBlocked = quotaLimitReached(chat);
   var codeBlocked = quotaLimitReached(code);
@@ -339,7 +344,7 @@ export function enrichItem(item, result, classifierOptions) {
   }
 
   badState = buildQuotaBadState(payload, chatBlocked, codeBlocked);
-  warnState = buildWarnState(chatQuota, codeQuota, options.lowQuotaThreshold);
+  warnState = buildWarnState(chatQuota, chatQuotaSecondary, codeQuota, options.lowQuotaThreshold);
 
   if (badState) {
     return Object.assign({}, item, {
@@ -351,6 +356,7 @@ export function enrichItem(item, result, classifierOptions) {
       quotaStateLabel: badState.label,
       planType: payload.plan_type || payload.planType || item.planType,
       chatQuota: chatQuota,
+      chatQuotaSecondary: chatQuotaSecondary,
       codeQuota: codeQuota,
       rawQuotaMessage: "",
       promoMessage: promoMessage,
@@ -373,6 +379,7 @@ export function enrichItem(item, result, classifierOptions) {
       quotaStateLabel: warnState.label,
       planType: payload.plan_type || payload.planType || item.planType,
       chatQuota: chatQuota,
+      chatQuotaSecondary: chatQuotaSecondary,
       codeQuota: codeQuota,
       rawQuotaMessage: "",
       promoMessage: promoMessage,
@@ -392,6 +399,7 @@ export function enrichItem(item, result, classifierOptions) {
     requestStatusText: buildRequestStatusText(HTTP_OK),
     planType: payload.plan_type || payload.planType || item.planType,
     chatQuota: chatQuota,
+    chatQuotaSecondary: chatQuotaSecondary,
     codeQuota: codeQuota,
     rawQuotaMessage: "",
     promoMessage: promoMessage
@@ -436,7 +444,12 @@ export function reclassifyItem(item, classifierOptions) {
             used_percent: item.chatQuota.used,
             reset_at: item.chatQuota.resetAt,
             limit_window_seconds: item.chatQuota.label === "周窗口" ? WEEK : FIVE_HOUR
-          }
+          },
+          secondary_window: item.chatQuotaSecondary ? {
+            used_percent: item.chatQuotaSecondary.used,
+            reset_at: item.chatQuotaSecondary.resetAt,
+            limit_window_seconds: item.chatQuotaSecondary.label === "周窗口" ? WEEK : FIVE_HOUR
+          } : null
         } : null,
         code_review_rate_limit: item.codeQuota ? {
           allowed: !(item.badReasonCode === "quota-code" || item.badReasonCode === "quota-both"),

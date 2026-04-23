@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import UsageInlineStats from "./UsageInlineStats.vue";
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS, POOL_SORT_MODES, POOL_SORT_OPTIONS } from "../lib/constants.js";
-import { fmt, isNum, sortItems } from "../lib/utils.js";
+import { buildPlanTypeOptions, fmt, planTypeFilterValue, quotaLeft as quotaLeftValue, quotaResetText, quotaText, sortItems } from "../lib/utils.js";
 
 var props = defineProps({
   consoleApp: {
@@ -19,6 +19,7 @@ var filters = reactive({
   search: "",
   category: "all",
   remain: "all",
+  planType: "all",
   sortMode: POOL_SORT_MODES.DEFAULT
 });
 var pageSize = ref(DEFAULT_PAGE_SIZE);
@@ -26,17 +27,7 @@ var currentPage = ref(1);
 var sortOptions = POOL_SORT_OPTIONS;
 
 function quotaLeft(item) {
-  var values = [];
-  if (item.chatQuota && isNum(item.chatQuota.left)) {
-    values.push(item.chatQuota.left);
-  }
-  if (item.codeQuota && isNum(item.codeQuota.left)) {
-    values.push(item.codeQuota.left);
-  }
-  if (!values.length) {
-    return null;
-  }
-  return Math.min.apply(Math, values);
+  return quotaLeftValue(item);
 }
 
 function matchesSearch(item) {
@@ -95,16 +86,26 @@ function matchesRemain(item) {
   return true;
 }
 
+function matchesPlanType(item) {
+  if (filters.planType === "all") {
+    return true;
+  }
+  return planTypeFilterValue(item) === filters.planType;
+}
+
 // 停用池只展示 disabled 文件，避免用户再去文件池和额度池里反复拼筛选条件。
 var sourceItems = computed(function () {
   return sortItems(props.consoleApp.state.items.filter(function (item) {
     return item.disabled;
   }));
 });
+var planTypeOptions = computed(function () {
+  return buildPlanTypeOptions(sourceItems.value);
+});
 
 var filteredItems = computed(function () {
   var items = sourceItems.value.filter(function (item) {
-    return matchesSearch(item) && matchesCategory(item) && matchesRemain(item);
+    return matchesSearch(item) && matchesCategory(item) && matchesRemain(item) && matchesPlanType(item);
   });
 
   if (filters.sortMode === POOL_SORT_MODES.SESSION_RESET_ASC) {
@@ -249,23 +250,6 @@ function stoppedReason(item) {
   return "当前处于停用状态，等待进一步处理。";
 }
 
-function quotaText(item) {
-  var chat = item.chatQuota && isNum(item.chatQuota.left) ? ("会话 " + item.chatQuota.left + "%") : "会话 --";
-  var code = item.codeQuota && isNum(item.codeQuota.left) ? ("代码 " + item.codeQuota.left + "%") : "代码 --";
-  return chat + " · " + code;
-}
-
-function resetText(item) {
-  var dates = [];
-  if (item.chatQuota && item.chatQuota.resetAt) {
-    dates.push("会话 " + fmt(item.chatQuota.resetAt, false));
-  }
-  if (item.codeQuota && item.codeQuota.resetAt) {
-    dates.push("代码 " + fmt(item.codeQuota.resetAt, false));
-  }
-  return dates.length ? dates.join(" · ") : "等待返回";
-}
-
 function syncStatusText(item) {
   var syncTime = fmt(item.lastRefresh || item.updatedAt, true);
   if (item.quotaStatus === "loading") {
@@ -349,6 +333,14 @@ function warningRemainText() {
       </label>
 
       <label class="field compact">
+        <span>套餐类型</span>
+        <select v-model="filters.planType" class="select-input">
+          <option value="all">全部套餐</option>
+          <option v-for="option in planTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
+      </label>
+
+      <label class="field compact">
         <span>每页条数</span>
         <select v-model.number="pageSize" class="select-input">
           <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ pageSizeText(size) }}</option>
@@ -404,7 +396,7 @@ function warningRemainText() {
           </div>
 
           <div class="row-cell time-cell">
-            <strong>{{ resetText(item) }}</strong>
+            <strong>{{ quotaResetText(item, false) }}</strong>
             <span>{{ syncStatusText(item) }}</span>
           </div>
 
@@ -503,7 +495,7 @@ function warningRemainText() {
 
 .control-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) repeat(4, minmax(140px, 0.24fr));
+  grid-template-columns: minmax(0, 1.2fr) repeat(5, minmax(132px, 0.22fr));
   gap: 10px;
   align-items: end;
 }

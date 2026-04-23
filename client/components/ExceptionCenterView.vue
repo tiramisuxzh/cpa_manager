@@ -1,7 +1,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS } from "../lib/constants.js";
-import { fmt, sortItems } from "../lib/utils.js";
+import { buildPlanTypeOptions, fmt, planTypeFilterValue, sortItems } from "../lib/utils.js";
 
 var props = defineProps({
   consoleApp: {
@@ -16,7 +16,8 @@ var props = defineProps({
 
 var filters = reactive({
   group: "auth-401",
-  search: ""
+  search: "",
+  planType: "all"
 });
 var pageSize = ref(DEFAULT_PAGE_SIZE);
 var currentPage = ref(1);
@@ -25,6 +26,9 @@ var sourceItems = computed(function () {
   return sortItems(props.consoleApp.state.items.filter(function (item) {
     return item.tone === "bad";
   }));
+});
+var planTypeOptions = computed(function () {
+  return buildPlanTypeOptions(sourceItems.value);
 });
 
 var groupCounts = computed(function () {
@@ -40,6 +44,9 @@ var filteredItems = computed(function () {
   return sourceItems.value.filter(function (item) {
     var scope;
     if (item.badReasonGroup !== filters.group) {
+      return false;
+    }
+    if (filters.planType !== "all" && planTypeFilterValue(item) !== filters.planType) {
       return false;
     }
     if (!keyword) {
@@ -112,7 +119,7 @@ var groupMeta = computed(function () {
 });
 
 watch(function () {
-  return filteredItems.value.length + "::" + pageSize.value + "::" + filters.group;
+  return filteredItems.value.length + "::" + pageSize.value + "::" + filters.group + "::" + filters.planType;
 }, function () {
   currentPage.value = Math.max(1, Math.min(currentPage.value, totalPages.value));
 });
@@ -253,6 +260,14 @@ function pageSizeText(size) {
       <label class="field search-field">
         <span>搜索当前分类</span>
         <input v-model="filters.search" class="text-input" placeholder="文件名、账号、异常说明">
+      </label>
+
+      <label class="field compact">
+        <span>套餐类型</span>
+        <select v-model="filters.planType" class="select-input">
+          <option value="all">全部套餐</option>
+          <option v-for="option in planTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
       </label>
 
       <label class="field compact">
@@ -425,7 +440,7 @@ function pageSizeText(size) {
 
 .control-bar {
   display: grid;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1fr) minmax(150px, 0.24fr);
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1fr) minmax(160px, 0.22fr) minmax(150px, 0.2fr);
   gap: 10px;
   align-items: end;
 }
