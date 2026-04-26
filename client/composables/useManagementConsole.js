@@ -9,6 +9,8 @@ import {
 import { sortItems } from "../lib/utils.js";
 import {
   AUTO_REFRESH_MODES,
+  TOKEN_REFRESH_DEFAULTS,
+  TOKEN_REFRESH_LIMITS,
   normalizeAutoRefreshMode
 } from "../lib/constants.js";
 import {
@@ -27,17 +29,22 @@ function normalizedSettings(settings) {
   var lowQuotaThreshold = parseInt(settings.lowQuotaThreshold, 10);
   var quotaConcurrency = parseInt(settings.quotaConcurrency, 10);
   var quotaRequestIntervalSeconds = parseFloat(settings.quotaRequestIntervalSeconds);
+  var tokenRefreshConcurrency = parseInt(settings.tokenRefreshConcurrency, 10);
+  var tokenRefreshIntervalSeconds = parseFloat(settings.tokenRefreshIntervalSeconds);
 
   return {
     baseUrl: String(settings.baseUrl || "").trim().replace(/\/+$/, ""),
     key: String(settings.key || "").trim(),
+    reviveProxyUrl: String(settings.reviveProxyUrl || "").trim(),
     interval: Math.max(1, parseInt(settings.interval, 10) || 10),
     showFilename: !!settings.showFilename,
     autoRefresh: !!settings.autoRefresh,
     autoRefreshMode: normalizeAutoRefreshMode(settings.autoRefreshMode),
     lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
     quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
-    quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds))
+    quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds)),
+    tokenRefreshConcurrency: Math.max(TOKEN_REFRESH_LIMITS.concurrency.min, Math.min(TOKEN_REFRESH_LIMITS.concurrency.max, Number.isNaN(tokenRefreshConcurrency) ? TOKEN_REFRESH_DEFAULTS.concurrency : tokenRefreshConcurrency)),
+    tokenRefreshIntervalSeconds: Math.max(TOKEN_REFRESH_LIMITS.intervalSeconds.min, Math.min(TOKEN_REFRESH_LIMITS.intervalSeconds.max, Number.isNaN(tokenRefreshIntervalSeconds) ? TOKEN_REFRESH_DEFAULTS.intervalSeconds : tokenRefreshIntervalSeconds))
   };
 }
 
@@ -49,7 +56,16 @@ function normalizedIntegrationSettings(settings) {
 
 function autoRefreshModeSummary(mode) {
   if (mode === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
-    return "同步文件列表并刷新额度";
+    return "同步文件列表、补拉凭证信息并刷新额度";
+  }
+  if (mode === AUTO_REFRESH_MODES.FILES_AND_CREDENTIALS) {
+    return "同步文件列表并补拉凭证信息";
+  }
+  if (mode === AUTO_REFRESH_MODES.CREDENTIALS_AND_QUOTAS) {
+    return "补拉凭证信息并刷新额度";
+  }
+  if (mode === AUTO_REFRESH_MODES.CREDENTIALS) {
+    return "仅补拉凭证信息";
   }
 
   return "仅同步文件列表";
@@ -57,7 +73,16 @@ function autoRefreshModeSummary(mode) {
 
 function autoRefreshModeLabel(mode) {
   if (mode === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
-    return "文件 + 额度";
+    return "文件 + 额度（含凭证）";
+  }
+  if (mode === AUTO_REFRESH_MODES.FILES_AND_CREDENTIALS) {
+    return "文件 + 凭证";
+  }
+  if (mode === AUTO_REFRESH_MODES.CREDENTIALS_AND_QUOTAS) {
+    return "凭证 + 额度";
+  }
+  if (mode === AUTO_REFRESH_MODES.CREDENTIALS) {
+    return "只凭证";
   }
 
   return "只文件";
@@ -307,6 +332,7 @@ export function useManagementConsole() {
     refreshId: 0,
     statusText: "等待连接",
     progress: { done: 0, total: 0 },
+    progressTasks: [],
     progressVisible: false,
     progressText: "等待任务开始…",
     progressPercent: 0,
@@ -320,7 +346,29 @@ export function useManagementConsole() {
   });
   var ui = reactive({
     detailKey: "",
-    pendingMap: {}
+    credentialDetailKey: "",
+    pendingMap: {},
+    operationDialog: {
+      visible: false,
+      title: "",
+      stage: "",
+      currentName: "",
+      activeNames: [],
+      currentIndex: 0,
+      total: 0,
+      percent: 0,
+      successCount: 0,
+      failureCount: 0,
+      successLabel: "",
+      failureLabel: "",
+      concurrency: 0,
+      intervalSeconds: null,
+      latestMessage: "",
+      failureDetails: [],
+      resultDetails: [],
+      canClose: false,
+      completed: false
+    }
   });
   var service = reactive({
     usageStatisticsEnabled: null,
@@ -353,8 +401,38 @@ export function useManagementConsole() {
   var dismissToast = feedback.dismissToast;
   var setBusy = feedback.setBusy;
   var setProgress = feedback.setProgress;
+  var completeProgressTask = feedback.completeProgressTask;
+  var removeProgressTask = feedback.removeProgressTask;
   var computeProgressPercent = feedback.computeProgressPercent;
   var setStatus = feedback.setStatus;
+
+  function progressTaskId(type, key) {
+    return String(type || "__global__") + "::" + String(key || "");
+  }
+
+  function resolveProgressTaskId(explicitTaskId, type, key) {
+    return explicitTaskId ? String(explicitTaskId) : progressTaskId(type, key);
+  }
+
+  function setTaskProgress(taskId, text, percent, options) {
+    setProgress(text, percent, Object.assign({}, options || {}, {
+      taskId: String(taskId || "__global__")
+    }));
+  }
+
+  function setTaskStatus(taskId, done, total, options) {
+    setStatus(done, total, Object.assign({}, options || {}, {
+      taskId: String(taskId || "__global__")
+    }));
+  }
+
+  function completeTaskProgress(taskId, text, options) {
+    completeProgressTask(String(taskId || "__global__"), text, options);
+  }
+
+  function removeTaskProgress(taskId) {
+    removeProgressTask(String(taskId || "__global__"));
+  }
 
   function pendingToken(type, key) {
     return String(type || "") + "::" + String(key || "");
@@ -412,6 +490,116 @@ export function useManagementConsole() {
         return token.indexOf(String(type) + "::") === 0;
       });
     });
+  }
+
+  function showOperationDialog(input) {
+    var options = input || {};
+
+    ui.operationDialog.visible = true;
+    ui.operationDialog.title = options.title || "批量处理中";
+    ui.operationDialog.stage = options.stage || "正在执行操作…";
+    ui.operationDialog.currentName = options.currentName || "";
+    ui.operationDialog.activeNames = Array.isArray(options.activeNames) ? options.activeNames.filter(Boolean) : [];
+    ui.operationDialog.currentIndex = Number(options.currentIndex) || 0;
+    ui.operationDialog.total = Number(options.total) || 0;
+    ui.operationDialog.percent = Number(options.percent) || 0;
+    ui.operationDialog.successCount = Number(options.successCount) || 0;
+    ui.operationDialog.failureCount = Number(options.failureCount) || 0;
+    ui.operationDialog.successLabel = options.successLabel || "";
+    ui.operationDialog.failureLabel = options.failureLabel || "";
+    ui.operationDialog.concurrency = Number(options.concurrency) || 0;
+    ui.operationDialog.intervalSeconds = options.intervalSeconds == null ? null : Number(options.intervalSeconds);
+    ui.operationDialog.latestMessage = options.latestMessage || "";
+    ui.operationDialog.failureDetails = Array.isArray(options.failureDetails) ? options.failureDetails.slice() : [];
+    ui.operationDialog.resultDetails = Array.isArray(options.resultDetails) ? options.resultDetails.slice() : [];
+    ui.operationDialog.canClose = !!options.canClose;
+    ui.operationDialog.completed = !!options.completed;
+  }
+
+  function updateOperationDialog(input) {
+    var options = input || {};
+
+    ui.operationDialog.visible = options.visible == null ? ui.operationDialog.visible : !!options.visible;
+    if (options.title != null) {
+      ui.operationDialog.title = options.title;
+    }
+    if (options.stage != null) {
+      ui.operationDialog.stage = options.stage;
+    }
+    if (options.currentName != null) {
+      ui.operationDialog.currentName = options.currentName;
+    }
+    if (options.activeNames != null) {
+      ui.operationDialog.activeNames = Array.isArray(options.activeNames) ? options.activeNames.filter(Boolean) : [];
+    }
+    if (options.currentIndex != null) {
+      ui.operationDialog.currentIndex = Number(options.currentIndex) || 0;
+    }
+    if (options.total != null) {
+      ui.operationDialog.total = Number(options.total) || 0;
+    }
+    if (options.percent != null) {
+      ui.operationDialog.percent = Number(options.percent) || 0;
+    }
+    if (options.successCount != null) {
+      ui.operationDialog.successCount = Number(options.successCount) || 0;
+    }
+    if (options.failureCount != null) {
+      ui.operationDialog.failureCount = Number(options.failureCount) || 0;
+    }
+    if (options.successLabel != null) {
+      ui.operationDialog.successLabel = options.successLabel;
+    }
+    if (options.failureLabel != null) {
+      ui.operationDialog.failureLabel = options.failureLabel;
+    }
+    if (options.concurrency != null) {
+      ui.operationDialog.concurrency = Number(options.concurrency) || 0;
+    }
+    if (options.intervalSeconds != null) {
+      ui.operationDialog.intervalSeconds = Number(options.intervalSeconds);
+    }
+    if (options.latestMessage != null) {
+      ui.operationDialog.latestMessage = options.latestMessage;
+    }
+    if (options.failureDetails != null) {
+      ui.operationDialog.failureDetails = Array.isArray(options.failureDetails) ? options.failureDetails.slice() : [];
+    }
+    if (options.resultDetails != null) {
+      ui.operationDialog.resultDetails = Array.isArray(options.resultDetails) ? options.resultDetails.slice() : [];
+    }
+    if (options.canClose != null) {
+      ui.operationDialog.canClose = !!options.canClose;
+    }
+    if (options.completed != null) {
+      ui.operationDialog.completed = !!options.completed;
+    }
+  }
+
+  function closeOperationDialog(force) {
+    if (ui.operationDialog.visible && !ui.operationDialog.canClose && !force) {
+      return;
+    }
+
+    ui.operationDialog.visible = false;
+    ui.operationDialog.title = "";
+    ui.operationDialog.stage = "";
+    ui.operationDialog.currentName = "";
+    ui.operationDialog.activeNames = [];
+    ui.operationDialog.currentIndex = 0;
+    ui.operationDialog.total = 0;
+    ui.operationDialog.percent = 0;
+    ui.operationDialog.successCount = 0;
+    ui.operationDialog.failureCount = 0;
+    ui.operationDialog.successLabel = "";
+    ui.operationDialog.failureLabel = "";
+    ui.operationDialog.concurrency = 0;
+    ui.operationDialog.intervalSeconds = null;
+    ui.operationDialog.latestMessage = "";
+    ui.operationDialog.failureDetails = [];
+    ui.operationDialog.resultDetails = [];
+    ui.operationDialog.canClose = false;
+    ui.operationDialog.completed = false;
   }
 
   function clearAutoRefreshTimer() {
@@ -488,6 +676,369 @@ export function useManagementConsole() {
     };
   }
 
+  function currentTokenRefreshOptions() {
+    var currentSettings = normalizedSettings(settings);
+    return {
+      concurrency: currentSettings.tokenRefreshConcurrency,
+      intervalSeconds: currentSettings.tokenRefreshIntervalSeconds
+    };
+  }
+
+  function credentialInfoTargets(list) {
+    return (Array.isArray(list) ? list : state.items).filter(function (item) {
+      return item && item.name && !item.runtimeOnly;
+    });
+  }
+
+  function writeCredentialInfo(key, credential) {
+    var detail = credential && typeof credential === "object" ? credential : {};
+
+    updateItem(key, function (current) {
+      return Object.assign({}, current, {
+        lastRefresh: detail.lastRefresh || "",
+        expired: detail.expired || "",
+        credentialInfoStatus: "success",
+        credentialInfoError: "",
+        credentialFetchedAt: detail.fetchedAt || "",
+        credentialContent: detail.content || null,
+        credentialText: detail.contentText || ""
+      });
+    });
+  }
+
+  function markCredentialInfoLoading(key) {
+    updateItem(key, function (current) {
+      return Object.assign({}, current, {
+        credentialInfoStatus: "loading",
+        credentialInfoError: ""
+      });
+    });
+  }
+
+  function markCredentialInfoError(key, message) {
+    updateItem(key, function (current) {
+      return Object.assign({}, current, {
+        credentialInfoStatus: "error",
+        credentialInfoError: message || "凭证信息同步失败"
+      });
+    });
+  }
+
+  async function readCredentialInfo(key, options) {
+    var currentOptions = options || {};
+    var item = state.items.filter(function (current) {
+      return current.key === key;
+    })[0];
+    var result;
+    var message;
+
+    if (!item || !item.name) {
+      return null;
+    }
+
+    if (currentOptions.markLoading !== false) {
+      markCredentialInfoLoading(key);
+    }
+    if (currentOptions.pendingType) {
+      startPending(currentOptions.pendingType, currentOptions.pendingKey || key);
+    }
+
+    try {
+      result = await api.readAuthFileDetail(item);
+      if (!result || result.success !== true || !result.credential) {
+        message = result && result.message ? result.message : "读取凭证信息失败";
+        markCredentialInfoError(key, message);
+        if (!currentOptions.silentLog) {
+          log("凭证信息同步失败：" + item.name + " · " + message, true);
+        }
+        if (!currentOptions.silentToast) {
+          notify("凭证信息同步失败：" + item.name + "\n" + message, "danger", 4200);
+        }
+        return Object.assign({}, result || {}, {
+          success: false,
+          message: message
+        });
+      }
+
+      writeCredentialInfo(key, result.credential);
+      if (!currentOptions.silentLog) {
+        log("凭证信息已同步：" + item.name);
+      }
+      if (!currentOptions.silentToast) {
+        notify("凭证信息已同步：" + item.name, "success");
+      }
+      if (currentOptions.persist !== false) {
+        persistCurrentSnapshot();
+      }
+      return result;
+    } catch (error) {
+      message = error && error.message ? error.message : "读取凭证信息失败";
+      markCredentialInfoError(key, message);
+      if (!currentOptions.silentLog) {
+        log("凭证信息同步失败：" + item.name + " · " + message, true);
+      }
+      if (!currentOptions.silentToast) {
+        notify("凭证信息同步失败：" + item.name + "\n" + message, "danger", 4200);
+      }
+      return {
+        success: false,
+        reason: "credential_info_request_failed",
+        message: message
+      };
+    } finally {
+      if (currentOptions.pendingType) {
+        finishPending(currentOptions.pendingType, currentOptions.pendingKey || key);
+      }
+    }
+  }
+
+  async function syncCredentialInfoBatch(list, options) {
+    var currentOptions = options || {};
+    var targetList = credentialInfoTargets(list);
+    var requestOptions = currentTokenRefreshOptions();
+    var pendingType = currentOptions.pendingType || "";
+    var progressId = resolveProgressTaskId(currentOptions.progressTaskId, pendingType || "credential-info-batch", currentOptions.pendingKey || "");
+    var manageProgressCompletion = currentOptions.manageProgressCompletion !== false;
+    var activeMap = {};
+    var total = targetList.length;
+    var cursor = 0;
+    var done = 0;
+    var successCount = 0;
+    var failureCount = 0;
+    var latestMessage = "";
+    var failureDetails = [];
+
+    function activeNames() {
+      return Object.keys(activeMap).map(function (key) {
+        return activeMap[key];
+      }).filter(Boolean);
+    }
+
+    function appendFailure(item, message) {
+      failureDetails = failureDetails.concat([{
+        key: item && item.key ? item.key : String(failureDetails.length),
+        name: item && (item.name || item.email) ? (item.name || item.email) : "未命名文件",
+        message: message || "未返回明确失败原因"
+      }]);
+    }
+
+    async function worker() {
+      var item;
+      var currentItem;
+      var result;
+      var message;
+
+      if (cursor >= total) {
+        return;
+      }
+
+      item = targetList[cursor];
+      cursor += 1;
+      currentItem = state.items.filter(function (current) {
+        return current.key === item.key;
+      })[0] || item;
+      activeMap[currentItem.key] = currentItem.name;
+      latestMessage = "正在同步凭证信息：" + currentItem.name;
+
+      if (currentOptions.showDialog) {
+        updateOperationDialog({
+          stage: currentOptions.runningStage || "正在批量同步凭证信息…",
+          currentName: currentItem.name,
+          activeNames: activeNames(),
+          currentIndex: done,
+          total: total,
+          percent: computeProgressPercent(done, total),
+          successCount: successCount,
+          failureCount: failureCount,
+          latestMessage: latestMessage,
+          failureDetails: failureDetails,
+          canClose: false,
+          completed: false
+        });
+      }
+
+      if (currentOptions.progressText) {
+        setTaskProgress(progressId, currentOptions.progressText + " 已完成 " + done + "/" + total + " · 当前 " + currentItem.name, computeProgressPercent(done, total), {
+          done: done,
+          total: total
+        });
+      }
+
+      result = await readCredentialInfo(currentItem.key, {
+        silentLog: true,
+        silentToast: true,
+        markLoading: true,
+        persist: false
+      });
+      message = result && result.message ? result.message : "凭证信息同步失败";
+
+      if (result && result.success === true) {
+        successCount += 1;
+        latestMessage = currentItem.name + " 凭证信息已同步";
+      } else {
+        failureCount += 1;
+        latestMessage = currentItem.name + " 失败：" + message;
+        appendFailure(currentItem, message);
+      }
+
+      done += 1;
+      delete activeMap[currentItem.key];
+
+      if (currentOptions.showDialog) {
+        updateOperationDialog({
+          currentName: currentItem.name,
+          activeNames: activeNames(),
+          currentIndex: done,
+          total: total,
+          percent: computeProgressPercent(done, total),
+          successCount: successCount,
+          failureCount: failureCount,
+          latestMessage: latestMessage,
+          failureDetails: failureDetails
+        });
+      }
+
+      if (requestOptions.intervalSeconds > 0 && cursor < total) {
+        await waitSeconds(requestOptions.intervalSeconds);
+      }
+
+      return worker();
+    }
+
+    if (!total) {
+      if (!currentOptions.silentEmpty) {
+        log(currentOptions.emptyLog || "当前没有可同步凭证信息的文件。");
+        notify(currentOptions.emptyToast || "当前没有可同步凭证信息的文件。", "info");
+      }
+      if (currentOptions.progressText && manageProgressCompletion) {
+        completeTaskProgress(progressId, currentOptions.emptyProgressText || "当前没有可同步凭证信息的文件。", {
+          tone: "info"
+        });
+      }
+      return null;
+    }
+
+    if (pendingType) {
+      startPending(pendingType, currentOptions.pendingKey || "");
+    }
+    if (currentOptions.manageBusy !== false) {
+      setBusy(true);
+    }
+    if (currentOptions.showDialog) {
+      closeOperationDialog(true);
+      showOperationDialog({
+        title: currentOptions.dialogTitle || "批量同步凭证信息",
+        stage: currentOptions.prepareStage || "正在准备批量同步凭证信息…",
+        currentName: targetList[0] ? targetList[0].name : "",
+        activeNames: [],
+        currentIndex: 0,
+        total: total,
+        percent: 0,
+        successCount: 0,
+        failureCount: 0,
+        successLabel: "凭证信息同步成功",
+        failureLabel: "凭证信息同步失败",
+        concurrency: requestOptions.concurrency,
+        intervalSeconds: requestOptions.intervalSeconds,
+        latestMessage: currentOptions.startingMessage || "任务启动后会按配置并发下载 auth-file JSON 并更新凭证字段。",
+        failureDetails: [],
+        canClose: false,
+        completed: false
+      });
+    }
+    if (currentOptions.progressText) {
+      setTaskProgress(progressId, currentOptions.prepareProgressText || "正在准备同步凭证信息…", 8, {
+        done: 0,
+        total: total
+      });
+    }
+
+    try {
+      if (!currentOptions.silentLog) {
+        log(currentOptions.startLog || ("开始同步凭证信息，共 " + total + " 个文件。"));
+      }
+      await Promise.all(Array.from({ length: Math.min(requestOptions.concurrency, total) }, function () {
+        return worker();
+      }));
+      persistCurrentSnapshot();
+
+      if (currentOptions.showDialog) {
+        updateOperationDialog({
+          stage: failureCount ? "批量凭证信息同步已完成，部分文件同步失败。" : "批量凭证信息同步已全部完成。",
+          activeNames: [],
+          currentName: targetList[targetList.length - 1] ? targetList[targetList.length - 1].name : "",
+          currentIndex: total,
+          total: total,
+          percent: 100,
+          successCount: successCount,
+          failureCount: failureCount,
+          latestMessage: "批量凭证信息同步完成：成功 " + successCount + " 个，失败 " + failureCount + " 个。",
+          failureDetails: failureDetails,
+          canClose: true,
+          completed: true
+        });
+      }
+
+      if (currentOptions.progressText && manageProgressCompletion) {
+        completeTaskProgress(progressId, currentOptions.finishProgressText || "凭证信息同步完成。", {
+          tone: failureCount ? "warn" : "success",
+          done: total,
+          total: total,
+          hideDelayMs: failureCount ? 2200 : 1400
+        });
+      }
+      if (!currentOptions.silentLog) {
+        log(currentOptions.completeLog || ("凭证信息同步完成：成功 " + successCount + " 个，失败 " + failureCount + " 个。"));
+      }
+      if (!currentOptions.silentToast) {
+        notify(currentOptions.completeToast || ("凭证信息同步完成：成功 " + successCount + " 个，失败 " + failureCount + " 个。"), failureCount ? "warn" : "success", 4200);
+      }
+      return {
+        ok: successCount,
+        fail: failureCount
+      };
+    } catch (error) {
+      latestMessage = error && error.message ? error.message : "批量同步凭证信息中断";
+      if (currentOptions.showDialog) {
+        updateOperationDialog({
+          stage: "批量凭证信息同步中断，请查看底部动态日志。",
+          activeNames: [],
+          currentIndex: done,
+          total: total,
+          percent: 100,
+          successCount: successCount,
+          failureCount: failureCount,
+          latestMessage: latestMessage,
+          failureDetails: failureDetails,
+          canClose: true,
+          completed: true
+        });
+      }
+      if (!currentOptions.silentLog) {
+        log("批量同步凭证信息中断：" + latestMessage, true);
+      }
+      if (!currentOptions.silentToast) {
+        notify("批量同步凭证信息中断。\n" + latestMessage, "danger", 6200);
+      }
+      if (currentOptions.progressText && manageProgressCompletion) {
+        completeTaskProgress(progressId, "批量同步凭证信息中断。", {
+          tone: "danger",
+          done: done,
+          total: total,
+          hideDelayMs: 2400
+        });
+      }
+      return null;
+    } finally {
+      if (currentOptions.manageBusy !== false) {
+        setBusy(false);
+      }
+      if (pendingType) {
+        finishPending(pendingType, currentOptions.pendingKey || "");
+      }
+    }
+  }
+
   function waitSeconds(seconds) {
     if (!seconds) {
       return Promise.resolve();
@@ -529,6 +1080,13 @@ export function useManagementConsole() {
     }
 
     merged = Object.assign({}, nextItem, {
+      lastRefresh: nextItem.lastRefresh || previousItem.lastRefresh || "",
+      expired: nextItem.expired || previousItem.expired || "",
+      credentialInfoStatus: previousItem.credentialInfoStatus || nextItem.credentialInfoStatus || "idle",
+      credentialInfoError: previousItem.credentialInfoError || "",
+      credentialFetchedAt: previousItem.credentialFetchedAt || "",
+      credentialContent: previousItem.credentialContent || null,
+      credentialText: previousItem.credentialText || "",
       planType: previousItem.planType || nextItem.planType,
       quotaStatus: previousItem.quotaStatus || "idle",
       quotaStatusCode: previousItem.quotaStatusCode == null ? null : previousItem.quotaStatusCode,
@@ -609,6 +1167,7 @@ export function useManagementConsole() {
         total: snapshot.progress.total || state.items.length
       }
       : { done: state.items.length, total: state.items.length };
+    state.progressTasks = [];
   }
 
   function restoreSnapshot(snapshot) {
@@ -672,6 +1231,7 @@ export function useManagementConsole() {
   async function refreshServiceState(options) {
     var currentOptions = options || {};
     var pendingType = currentOptions.pendingType || "";
+    var progressId = resolveProgressTaskId(currentOptions.progressTaskId, pendingType || "service-refresh", currentOptions.pendingKey || "");
     var requests;
     var results;
     var fulfilled = 0;
@@ -689,7 +1249,7 @@ export function useManagementConsole() {
     }
     if (!currentOptions.passive) {
       setBusy(true);
-      setProgress("正在同步服务设置与运行状态…", 18);
+      setTaskProgress(progressId, "正在同步服务设置与运行状态…", 18);
     }
 
     requests = [
@@ -742,10 +1302,21 @@ export function useManagementConsole() {
       if (!currentOptions.silentLog) {
         log("已同步官方管理 API 的服务侧设置。");
       }
+      if (!currentOptions.passive) {
+        completeTaskProgress(progressId, "服务侧设置已同步。", {
+          tone: "success"
+        });
+      }
     } catch (error) {
       log("同步服务设置失败：" + (error.message || "未知错误"), true);
       if (!currentOptions.silentToast) {
         notify("同步服务设置失败。", "danger", 3200);
+      }
+      if (!currentOptions.passive) {
+        completeTaskProgress(progressId, "同步服务设置失败。", {
+          tone: "danger",
+          hideDelayMs: 2200
+        });
       }
     } finally {
       if (!currentOptions.passive) {
@@ -764,6 +1335,7 @@ export function useManagementConsole() {
       debug: { path: "debug", label: "Debug 模式" }
     };
     var current = mapping[key];
+    var progressId = progressTaskId("service-flags", key);
 
     if (!current) {
       return;
@@ -771,7 +1343,7 @@ export function useManagementConsole() {
 
     startPending("service-flags", key);
     setBusy(true);
-    setProgress("正在更新" + current.label + "…", 34);
+    setTaskProgress(progressId, "正在更新" + current.label + "…", 34);
 
     try {
       await api.setManagementValue(current.path, !!value);
@@ -780,9 +1352,16 @@ export function useManagementConsole() {
 
       log(current.label + "已" + (value ? "开启" : "关闭") + "。");
       notify(current.label + "已" + (value ? "开启" : "关闭") + "。", "success");
+      completeTaskProgress(progressId, current.label + "已" + (value ? "开启" : "关闭") + "。", {
+        tone: "success"
+      });
     } catch (error) {
       log(current.label + "更新失败：" + (error.message || "未知错误"), true);
       notify(current.label + "更新失败。", "danger", 3200);
+      completeTaskProgress(progressId, current.label + "更新失败。", {
+        tone: "danger",
+        hideDelayMs: 2200
+      });
     } finally {
       setBusy(false);
       finishPending("service-flags", key);
@@ -791,10 +1370,11 @@ export function useManagementConsole() {
 
   async function saveServiceProxy() {
     var value = String(service.proxyUrl || "").trim();
+    var progressId = progressTaskId("service-proxy", "save");
 
     startPending("service-proxy", "save");
     setBusy(true);
-    setProgress("正在保存代理地址…", 38);
+    setTaskProgress(progressId, "正在保存代理地址…", 38);
 
     try {
       if (value) {
@@ -809,9 +1389,16 @@ export function useManagementConsole() {
         notify("代理地址已清空。", "success");
       }
       service.lastSyncAt = new Date().toLocaleString("zh-CN", { hour12: false });
+      completeTaskProgress(progressId, value ? "代理地址已保存。" : "代理地址已清空。", {
+        tone: "success"
+      });
     } catch (error) {
       log("保存代理地址失败：" + (error.message || "未知错误"), true);
       notify("保存代理地址失败。", "danger", 3200);
+      completeTaskProgress(progressId, "保存代理地址失败。", {
+        tone: "danger",
+        hideDelayMs: 2200
+      });
     } finally {
       setBusy(false);
       finishPending("service-proxy", "save");
@@ -826,10 +1413,11 @@ export function useManagementConsole() {
   async function saveRetrySettings() {
     var retryValue = String(service.requestRetry || "").trim();
     var intervalValue = String(service.maxRetryInterval || "").trim();
+    var progressId = progressTaskId("service-retry", "save");
 
     startPending("service-retry", "save");
     setBusy(true);
-    setProgress("正在保存重试策略…", 42);
+    setTaskProgress(progressId, "正在保存重试策略…", 42);
 
     try {
       if (retryValue) {
@@ -849,9 +1437,16 @@ export function useManagementConsole() {
       service.lastSyncAt = new Date().toLocaleString("zh-CN", { hour12: false });
       log("已更新请求重试策略。");
       notify("重试策略已保存。", "success");
+      completeTaskProgress(progressId, "重试策略已保存。", {
+        tone: "success"
+      });
     } catch (error) {
       log("保存重试策略失败：" + (error.message || "未知错误"), true);
       notify("保存重试策略失败。", "danger", 3200);
+      completeTaskProgress(progressId, "保存重试策略失败。", {
+        tone: "danger",
+        hideDelayMs: 2200
+      });
     } finally {
       setBusy(false);
       finishPending("service-retry", "save");
@@ -860,10 +1455,11 @@ export function useManagementConsole() {
 
   async function saveDefaultSettings() {
     var nextManagement = normalizedSettings(settings);
+    var progressId = progressTaskId("save-default-settings", "save");
 
     startPending("save-default-settings");
     setBusy(true);
-    setProgress("正在保存默认配置…", 36);
+    setTaskProgress(progressId, "正在保存默认配置…", 36);
 
     try {
       // 设置页的“保存默认配置”只把当前 management 配置回写到 app-config.json，页面本地缓存逻辑保持不变。
@@ -874,9 +1470,16 @@ export function useManagementConsole() {
       });
       log("已将当前管理台配置保存为默认配置。");
       notify("默认配置已保存到 app-config.json。", "success");
+      completeTaskProgress(progressId, "默认配置已保存。", {
+        tone: "success"
+      });
     } catch (error) {
       log("保存默认配置失败：" + (error.message || "未知错误"), true);
       notify("保存默认配置失败。", "danger", 3200);
+      completeTaskProgress(progressId, "保存默认配置失败。", {
+        tone: "danger",
+        hideDelayMs: 2200
+      });
     } finally {
       setBusy(false);
       finishPending("save-default-settings");
@@ -889,10 +1492,11 @@ export function useManagementConsole() {
         url: normalizedIntegrationSettings(integrationSettings).wenfxlOpenaiUrl
       }
     };
+    var progressId = progressTaskId("save-integration-settings", "save");
 
     startPending("save-integration-settings");
     setBusy(true);
-    setProgress("正在保存集成配置…", 36);
+    setTaskProgress(progressId, "正在保存集成配置…", 36);
 
     try {
       // 集成配置与 management 默认值分开保存，避免不同设置页之间互相覆盖。
@@ -903,9 +1507,16 @@ export function useManagementConsole() {
       });
       log("已将当前外部集成配置保存为默认配置。");
       notify("集成配置已保存到 app-config.json。", "success");
+      completeTaskProgress(progressId, "集成配置已保存。", {
+        tone: "success"
+      });
     } catch (error) {
       log("保存集成配置失败：" + (error.message || "未知错误"), true);
       notify("保存集成配置失败。", "danger", 3200);
+      completeTaskProgress(progressId, "保存集成配置失败。", {
+        tone: "danger",
+        hideDelayMs: 2200
+      });
     } finally {
       setBusy(false);
       finishPending("save-integration-settings");
@@ -916,6 +1527,8 @@ export function useManagementConsole() {
     var currentOptions = options || {};
     var classifierOptions = currentClassifierOptions();
     var quotaRequestOptions = currentQuotaRequestOptions();
+    var progressId = resolveProgressTaskId(currentOptions.progressTaskId, currentOptions.progressType || "quota-refresh", currentOptions.progressKey || "");
+    var manageProgressCompletion = currentOptions.manageProgressCompletion !== false;
     var list = Array.isArray(currentOptions.items)
       ? currentOptions.items.filter(function (item) { return item && item.authIndex && item.accountId; })
       : state.items.filter(function (item) { return item.authIndex && item.accountId; });
@@ -923,10 +1536,15 @@ export function useManagementConsole() {
     var done = 0;
     var cursor = 0;
 
-    setStatus(0, total);
+    setTaskStatus(progressId, 0, total);
     if (!total) {
       if (!currentOptions.silentLog) {
         log(currentOptions.emptyLog || "当前没有可拉取额度的 Codex 账号，已跳过额度刷新。");
+      }
+      if (manageProgressCompletion) {
+        completeTaskProgress(progressId, currentOptions.emptyProgressText || "当前没有可拉取额度的账号。", {
+          tone: "info"
+        });
       }
       return;
     }
@@ -966,7 +1584,7 @@ export function useManagementConsole() {
         });
       } finally {
         done += 1;
-        setStatus(done, total);
+        setTaskStatus(progressId, done, total);
       }
 
       if (refreshId === state.refreshId && quotaRequestOptions.intervalSeconds > 0 && cursor < list.length) {
@@ -985,10 +1603,23 @@ export function useManagementConsole() {
     }
 
     await Promise.all(jobs);
+    if (refreshId !== state.refreshId) {
+      if (manageProgressCompletion) {
+        removeTaskProgress(progressId);
+      }
+      return;
+    }
     if (refreshId === state.refreshId) {
       persistCurrentSnapshot();
       if (!currentOptions.silentLog) {
         log(currentOptions.completeLog || ("额度刷新完成，共处理 " + total + " 个账号。"));
+      }
+      if (manageProgressCompletion) {
+        completeTaskProgress(progressId, currentOptions.completeProgressText || ("额度刷新完成，共处理 " + total + " 个账号。"), {
+          tone: "success",
+          done: total,
+          total: total
+        });
       }
     }
   }
@@ -1016,13 +1647,14 @@ export function useManagementConsole() {
   async function loadUsageEvents(options) {
     var currentOptions = options || {};
     var pendingType = currentOptions.pendingType || "usage-events-refresh";
+    var progressId = resolveProgressTaskId(currentOptions.progressTaskId, pendingType, currentOptions.pendingKey || "");
 
     if (pendingType) {
       startPending(pendingType, currentOptions.pendingKey || "");
     }
 
     setBusy(true);
-    setProgress(currentOptions.progressLabel || "正在同步请求事件明细…", 18);
+    setTaskProgress(progressId, currentOptions.progressLabel || "正在同步请求事件明细…", 18);
 
     try {
       if (!currentOptions.silentLog) {
@@ -1044,6 +1676,9 @@ export function useManagementConsole() {
         if (!currentOptions.silentToast) {
           notify("服务端当前未开启 Usage 统计。", "info");
         }
+        completeTaskProgress(progressId, "服务端当前未开启 Usage 统计。", {
+          tone: "info"
+        });
         return null;
       }
 
@@ -1057,6 +1692,9 @@ export function useManagementConsole() {
       if (!currentOptions.silentToast) {
         notify(currentOptions.completeToast || ("请求事件明细已同步，共 " + usageCenter.summary.totalRequests + " 条请求。"), "success");
       }
+      completeTaskProgress(progressId, currentOptions.completeProgressText || "请求事件明细已同步。", {
+        tone: "success"
+      });
       return usageCenter.events;
     } catch (error) {
       usageCenter.error = error.message || "请求事件明细同步失败";
@@ -1064,6 +1702,10 @@ export function useManagementConsole() {
       if (!currentOptions.silentToast) {
         notify("请求事件明细同步失败。", "danger", 3200);
       }
+      completeTaskProgress(progressId, "请求事件明细同步失败。", {
+        tone: "danger",
+        hideDelayMs: 2200
+      });
       return null;
     } finally {
       setBusy(false);
@@ -1086,6 +1728,9 @@ export function useManagementConsole() {
   async function loadFiles(options) {
     var currentOptions = options || {};
     var pendingType = currentOptions.pendingType || "";
+    var includeCredentialInfo = !!currentOptions.includeCredentialInfo;
+    var progressId = resolveProgressTaskId(currentOptions.progressTaskId, pendingType || "load-files", currentOptions.pendingKey || "");
+    var credentialResult;
 
     if (pendingType) {
       startPending(pendingType, currentOptions.pendingKey || "");
@@ -1094,7 +1739,7 @@ export function useManagementConsole() {
     writeLocalSettings();
     markAutoRefreshRunning(currentOptions);
     setBusy(true);
-    setProgress(currentOptions.progressLabel || "正在拉取认证文件列表…", 12);
+    setTaskProgress(progressId, currentOptions.progressLabel || "正在拉取认证文件列表…", 12);
     state.statusText = "正在拉取账号列表…";
     state.refreshId += 1;
     var refreshId = state.refreshId;
@@ -1108,31 +1753,60 @@ export function useManagementConsole() {
       var files = extractCodexFiles(data);
 
       if (refreshId !== state.refreshId) {
+        removeTaskProgress(progressId);
         return;
       }
 
       applyAuthFiles(files);
+
+      if (includeCredentialInfo) {
+        setTaskProgress(progressId, "文件列表已同步，正在补拉凭证信息…", 36);
+        credentialResult = await syncCredentialInfoBatch(state.items, {
+          manageBusy: false,
+          showDialog: false,
+          silentLog: true,
+          silentToast: true,
+          silentEmpty: true,
+          progressText: "正在同步凭证信息…",
+          prepareProgressText: "正在准备同步凭证信息…",
+          finishProgressText: "文件与凭证信息同步完成。",
+          progressTaskId: progressId,
+          manageProgressCompletion: false
+        });
+        if (state.items.length && credentialResult == null) {
+          throw new Error("凭证信息同步失败");
+        }
+      }
+
       state.statusText = state.items.length
-        ? ("文件列表已同步 · 共 " + state.items.length + " 个账号")
+        ? ((includeCredentialInfo ? "文件与凭证信息已同步" : "文件列表已同步") + " · 共 " + state.items.length + " 个账号")
         : "文件列表已同步，当前没有 Codex 账号";
-      setProgress(currentOptions.finishProgressText || "文件列表同步完成。", 100);
+      completeTaskProgress(progressId, currentOptions.finishProgressText || (includeCredentialInfo ? "文件与凭证信息同步完成。" : "文件列表同步完成。"), {
+        tone: "success"
+      });
       markAutoRefreshSuccess(currentOptions);
 
       if (!currentOptions.silentLog) {
-        log(currentOptions.completeLog || ("认证文件列表已同步，共 " + state.items.length + " 个 Codex 账号。"));
+        log(currentOptions.completeLog || ((includeCredentialInfo ? "认证文件与凭证信息已同步，共 " : "认证文件列表已同步，共 ") + state.items.length + " 个 Codex 账号。"));
       }
       if (!currentOptions.silentToast) {
-        notify(currentOptions.completeToast || ("文件列表已同步，当前共 " + state.items.length + " 个 Codex 账号。"), "success");
+        notify(currentOptions.completeToast || ((includeCredentialInfo ? "文件与凭证信息已同步，当前共 " : "文件列表已同步，当前共 ") + state.items.length + " 个 Codex 账号。"), "success");
       }
     } catch (error) {
-      state.statusText = "文件列表拉取失败，请检查连接";
+      state.statusText = error && error.message === "凭证信息同步失败"
+        ? "文件列表已同步，但凭证信息同步失败"
+        : "文件列表拉取失败，请检查连接";
       markAutoRefreshFailure(currentOptions, error);
       if (!currentOptions.silentLog) {
-        log("文件列表刷新失败：" + (error.message || "未知错误"), true);
+        log((error && error.message === "凭证信息同步失败" ? "文件列表已同步，但凭证信息同步失败：" : "文件列表刷新失败：") + (error.message || "未知错误"), true);
       }
       if (!currentOptions.silentErrorToast) {
-        notify("文件列表刷新失败，请检查管理地址与 Management Key。", "danger", 3200);
+        notify(error && error.message === "凭证信息同步失败" ? "文件列表已同步，但凭证信息同步失败。" : "文件列表刷新失败，请检查管理地址与 Management Key。", "danger", 3200);
       }
+      completeTaskProgress(progressId, error && error.message === "凭证信息同步失败" ? "文件列表已同步，但凭证信息同步失败。" : "文件列表刷新失败。", {
+        tone: "danger",
+        hideDelayMs: 2400
+      });
     } finally {
       setBusy(false);
       if (pendingType) {
@@ -1144,6 +1818,7 @@ export function useManagementConsole() {
   async function loadQuotasBatch(list, options) {
     var currentOptions = options || {};
     var pendingType = currentOptions.pendingType || "";
+    var progressId = resolveProgressTaskId(currentOptions.progressTaskId, pendingType || "quota-batch", currentOptions.pendingKey || "");
     var targetList = Array.isArray(list) ? list.filter(function (item) {
       return item && item.authIndex && item.accountId;
     }) : [];
@@ -1159,7 +1834,7 @@ export function useManagementConsole() {
     }
 
     setBusy(true);
-    setProgress(currentOptions.progressLabel || "正在准备刷新额度…", 12);
+    setTaskProgress(progressId, currentOptions.progressLabel || "正在准备刷新额度…", 12);
     state.refreshId += 1;
     var refreshId = state.refreshId;
 
@@ -1173,17 +1848,22 @@ export function useManagementConsole() {
           loadUsageStats(refreshId),
           loadQuotas(refreshId, {
             items: targetList,
-            silentLog: true
+            silentLog: true,
+            progressTaskId: progressId,
+            manageProgressCompletion: false
           })
         ]);
       } else {
         await loadQuotas(refreshId, {
           items: targetList,
-          silentLog: true
+          silentLog: true,
+          progressTaskId: progressId,
+          manageProgressCompletion: false
         });
       }
 
       if (refreshId !== state.refreshId) {
+        removeTaskProgress(progressId);
         return null;
       }
 
@@ -1193,10 +1873,19 @@ export function useManagementConsole() {
       if (!currentOptions.silentToast) {
         notify(currentOptions.completeToast || ("额度刷新完成，共处理 " + targetList.length + " 个账号。"), "success");
       }
+      completeTaskProgress(progressId, currentOptions.completeProgressText || ("额度刷新完成，共处理 " + targetList.length + " 个账号。"), {
+        tone: "success",
+        done: targetList.length,
+        total: targetList.length
+      });
       return { total: targetList.length };
     } catch (error) {
       log((currentOptions.failLogPrefix || "额度刷新失败：") + (error.message || "未知错误"), true);
       notify(currentOptions.failToast || "额度刷新失败，请检查连接。", "danger", 3200);
+      completeTaskProgress(progressId, currentOptions.failProgressText || "额度刷新失败。", {
+        tone: "danger",
+        hideDelayMs: 2400
+      });
       return null;
     } finally {
       setBusy(false);
@@ -1224,8 +1913,9 @@ export function useManagementConsole() {
     var selectedItems = state.items.filter(function (item) {
       return !!state.selected[item.key];
     });
+    var result;
 
-    return loadQuotasBatch(selectedItems, Object.assign({
+    result = await loadQuotasBatch(selectedItems, Object.assign({
       pendingType: "refresh-selected-quotas",
       progressLabel: "正在准备刷新选中额度…",
       startLog: "开始刷新选中额度。",
@@ -1236,6 +1926,11 @@ export function useManagementConsole() {
       failToast: "选中额度刷新失败，请检查连接。",
       includeUsage: false
     }, options || {}));
+
+    clearSelectionKeys(selectedItems.map(function (item) {
+      return item.key;
+    }));
+    return result;
   }
 
   async function refreshDisabledQuotas(options) {
@@ -1257,10 +1952,43 @@ export function useManagementConsole() {
     }, options || {}));
   }
 
+  async function refreshSelectedCredentialInfo(options) {
+    var selectedItems = state.items.filter(function (item) {
+      return !!state.selected[item.key];
+    });
+    var result;
+
+    result = await syncCredentialInfoBatch(selectedItems, Object.assign({
+      pendingType: "refresh-credential-info-selected",
+      dialogTitle: "批量同步凭证信息",
+      prepareStage: "正在准备批量同步选中凭证信息…",
+      runningStage: "正在批量同步选中凭证信息…",
+      startingMessage: "任务启动后会按配置并发下载 auth-file JSON，并回填 last_refresh / expired 等凭证字段。",
+      progressText: "正在同步凭证信息…",
+      prepareProgressText: "正在准备同步选中凭证信息…",
+      finishProgressText: "批量同步凭证信息完成。",
+      startLog: "开始批量同步选中凭证信息。",
+      completeLog: "批量同步选中凭证信息完成。",
+      completeToast: "批量同步选中凭证信息完成。",
+      emptyLog: "当前没有可同步凭证信息的选中文件。",
+      emptyToast: "当前没有可同步凭证信息的选中文件。",
+      showDialog: true,
+      silentEmpty: false
+    }, options || {}));
+
+    clearSelectionKeys(selectedItems.map(function (item) {
+      return item.key;
+    }));
+    return result;
+  }
+
   async function loadAll(options) {
     var currentOptions = options || {};
     var pendingType = currentOptions.pendingType || "";
     var includeUsage = currentOptions.includeUsage !== false;
+    var includeCredentialInfo = !!currentOptions.includeCredentialInfo;
+    var progressId = resolveProgressTaskId(currentOptions.progressTaskId, pendingType || "load-all", currentOptions.pendingKey || "");
+    var credentialResult;
 
     if (pendingType) {
       startPending(pendingType, currentOptions.pendingKey || "");
@@ -1269,7 +1997,7 @@ export function useManagementConsole() {
     writeLocalSettings();
     markAutoRefreshRunning(currentOptions);
     setBusy(true);
-    setProgress(includeUsage ? "正在同步文件列表、请求统计与额度…" : "正在同步文件列表与额度…", 8);
+    setTaskProgress(progressId, includeCredentialInfo ? "正在同步文件列表、凭证信息与额度…" : (includeUsage ? "正在同步文件列表、请求统计与额度…" : "正在同步文件列表与额度…"), 8);
     state.statusText = "正在拉取账号列表…";
     state.refreshId += 1;
     var refreshId = state.refreshId;
@@ -1282,49 +2010,86 @@ export function useManagementConsole() {
       var files = extractCodexFiles(data);
 
       if (refreshId !== state.refreshId) {
+        removeTaskProgress(progressId);
         return;
       }
 
       applyAuthFiles(files);
       if (!currentOptions.silentLog) {
-        log("认证文件已载入，Codex 账号 " + state.items.length + " 个，开始拉取" + (includeUsage ? "请求统计与额度明细。" : "额度明细。"));
+        log("认证文件已载入，Codex 账号 " + state.items.length + " 个，开始拉取" + (includeCredentialInfo ? "凭证信息与" : "") + (includeUsage ? "请求统计与额度明细。" : "额度明细。"));
       }
 
+      if (includeCredentialInfo) {
+        setTaskProgress(progressId, "认证文件已载入，正在同步凭证信息…", 28);
+        credentialResult = await syncCredentialInfoBatch(state.items, {
+          manageBusy: false,
+          showDialog: false,
+          silentLog: true,
+          silentToast: true,
+          silentEmpty: true,
+          progressText: "正在同步凭证信息…",
+          prepareProgressText: "正在准备同步凭证信息…",
+          finishProgressText: "凭证信息同步完成。",
+          progressTaskId: progressId,
+          manageProgressCompletion: false
+        });
+        if (state.items.length && credentialResult == null) {
+          throw new Error("凭证信息同步失败");
+        }
+      }
+
+      setTaskProgress(progressId, includeUsage ? "正在同步额度与请求统计…" : "正在同步额度…", includeCredentialInfo ? 54 : 32);
       if (includeUsage) {
         await Promise.all([
           loadUsageStats(refreshId),
           loadQuotas(refreshId, {
             items: state.items,
-            silentLog: true
+            silentLog: true,
+            progressTaskId: progressId,
+            manageProgressCompletion: false
           })
         ]);
       } else {
         await loadQuotas(refreshId, {
           items: state.items,
-          silentLog: true
+          silentLog: true,
+          progressTaskId: progressId,
+          manageProgressCompletion: false
         });
       }
 
       if (refreshId !== state.refreshId) {
+        removeTaskProgress(progressId);
         return;
       }
 
       if (!currentOptions.silentLog) {
-        log((includeUsage ? "文件、请求统计与额度同步完成，共处理 " : "文件与额度同步完成，共处理 ") + state.items.length + " 个账号。");
+        log((includeCredentialInfo ? "文件、凭证信息与额度同步完成，共处理 " : (includeUsage ? "文件、请求统计与额度同步完成，共处理 " : "文件与额度同步完成，共处理 ")) + state.items.length + " 个账号。");
       }
       markAutoRefreshSuccess(currentOptions);
       if (!currentOptions.silentToast) {
-        notify((includeUsage ? "文件、请求统计与额度同步完成，当前共 " : "文件与额度同步完成，当前共 ") + state.items.length + " 个 Codex 账号。", "success");
+        notify((includeCredentialInfo ? "文件、凭证信息与额度同步完成，当前共 " : (includeUsage ? "文件、请求统计与额度同步完成，当前共 " : "文件与额度同步完成，当前共 ")) + state.items.length + " 个 Codex 账号。", "success");
       }
+      completeTaskProgress(progressId, includeCredentialInfo ? "文件、凭证信息与额度同步完成。" : (includeUsage ? "文件、请求统计与额度同步完成。" : "文件与额度同步完成。"), {
+        tone: "success",
+        done: state.items.length,
+        total: state.items.length
+      });
     } catch (error) {
-      state.statusText = "同步失败，请检查连接";
+      state.statusText = error && error.message === "凭证信息同步失败"
+        ? "文件列表已同步，但凭证信息同步失败"
+        : "同步失败，请检查连接";
       markAutoRefreshFailure(currentOptions, error);
       if (!currentOptions.silentLog) {
-        log("同步失败：认证文件或额度加载异常，" + (error.message || "未知错误"), true);
+        log((error && error.message === "凭证信息同步失败" ? "同步失败：凭证信息加载异常，" : "同步失败：认证文件或额度加载异常，") + (error.message || "未知错误"), true);
       }
       if (!currentOptions.silentErrorToast) {
-        notify("同步失败，请检查管理地址与 Management Key。", "danger", 3200);
+        notify(error && error.message === "凭证信息同步失败" ? "文件列表已同步，但凭证信息同步失败。" : "同步失败，请检查管理地址与 Management Key。", "danger", 3200);
       }
+      completeTaskProgress(progressId, error && error.message === "凭证信息同步失败" ? "文件列表已同步，但凭证信息同步失败。" : "同步失败，请检查连接。", {
+        tone: "danger",
+        hideDelayMs: 2400
+      });
     } finally {
       setBusy(false);
       if (pendingType) {
@@ -1348,6 +2113,147 @@ export function useManagementConsole() {
     }
   }
 
+  async function executeCurrentAutoRefreshMode(options) {
+    var currentOptions = options || {};
+    var currentSettings = currentOptions.settings || normalizedSettings(settings);
+    var pendingType = currentOptions.pendingType || "";
+    var pendingKey = currentOptions.pendingKey || "";
+
+    if (pendingType) {
+      startPending(pendingType, pendingKey);
+    }
+
+    try {
+      if (currentSettings.autoRefreshMode === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
+        return loadAll(Object.assign({}, currentOptions, {
+          pendingType: "",
+          includeCredentialInfo: true,
+          includeUsage: false,
+          autoRefreshMode: currentSettings.autoRefreshMode,
+          autoRefreshInterval: currentSettings.interval
+        }));
+      }
+
+      if (currentSettings.autoRefreshMode === AUTO_REFRESH_MODES.FILES_AND_CREDENTIALS) {
+        return loadFiles(Object.assign({}, currentOptions, {
+          pendingType: "",
+          includeCredentialInfo: true,
+          autoRefreshMode: currentSettings.autoRefreshMode,
+          autoRefreshInterval: currentSettings.interval
+        }));
+      }
+
+      if (currentSettings.autoRefreshMode === AUTO_REFRESH_MODES.CREDENTIALS_AND_QUOTAS) {
+        var credentialResult = await syncCredentialInfoBatch(state.items, {
+          manageBusy: true,
+          showDialog: false,
+          silentLog: !!currentOptions.silentLog,
+          silentToast: !!currentOptions.silentToast,
+          silentEmpty: true,
+          progressText: currentOptions.progressText || "正在同步凭证信息…"
+        });
+        var quotaResult;
+
+        if (!state.items.length) {
+          markAutoRefreshSuccess({
+            triggerSource: currentOptions.triggerSource,
+            autoRefreshMode: currentSettings.autoRefreshMode,
+            autoRefreshInterval: currentSettings.interval
+          });
+          return { total: 0 };
+        }
+        if (credentialResult == null) {
+          markAutoRefreshFailure({
+            triggerSource: currentOptions.triggerSource,
+            autoRefreshMode: currentSettings.autoRefreshMode,
+            autoRefreshInterval: currentSettings.interval
+          }, new Error("同步凭证信息失败"));
+          return null;
+        }
+
+        quotaResult = await loadQuotasBatch(state.items, {
+          includeUsage: false,
+          silentLog: !!currentOptions.silentLog,
+          silentToast: !!currentOptions.silentToast,
+          pendingType: ""
+        });
+        if (quotaResult == null) {
+          markAutoRefreshFailure({
+            triggerSource: currentOptions.triggerSource,
+            autoRefreshMode: currentSettings.autoRefreshMode,
+            autoRefreshInterval: currentSettings.interval
+          }, new Error("刷新额度失败"));
+          return null;
+        }
+
+        markAutoRefreshSuccess({
+          triggerSource: currentOptions.triggerSource,
+          autoRefreshMode: currentSettings.autoRefreshMode,
+          autoRefreshInterval: currentSettings.interval
+        });
+        return quotaResult;
+      }
+
+      if (currentSettings.autoRefreshMode === AUTO_REFRESH_MODES.CREDENTIALS) {
+        var result = await syncCredentialInfoBatch(state.items, {
+          manageBusy: true,
+          showDialog: false,
+          silentLog: !!currentOptions.silentLog,
+          silentToast: !!currentOptions.silentToast,
+          silentEmpty: true,
+          progressText: currentOptions.progressText || "正在同步凭证信息…"
+        });
+
+        if (!state.items.length) {
+          markAutoRefreshSuccess({
+            triggerSource: currentOptions.triggerSource,
+            autoRefreshMode: currentSettings.autoRefreshMode,
+            autoRefreshInterval: currentSettings.interval
+          });
+          return { ok: 0, fail: 0 };
+        }
+        if (result == null) {
+          markAutoRefreshFailure({
+            triggerSource: currentOptions.triggerSource,
+            autoRefreshMode: currentSettings.autoRefreshMode,
+            autoRefreshInterval: currentSettings.interval
+          }, new Error("同步凭证信息失败"));
+          return null;
+        }
+
+        markAutoRefreshSuccess({
+          triggerSource: currentOptions.triggerSource,
+          autoRefreshMode: currentSettings.autoRefreshMode,
+          autoRefreshInterval: currentSettings.interval
+        });
+        return result;
+      }
+
+      return loadFiles(Object.assign({}, currentOptions, {
+        pendingType: "",
+        autoRefreshMode: currentSettings.autoRefreshMode,
+        autoRefreshInterval: currentSettings.interval
+      }));
+    } finally {
+      if (pendingType) {
+        finishPending(pendingType, pendingKey);
+      }
+    }
+  }
+
+  async function runCurrentAutoRefreshMode() {
+    var currentSettings = normalizedSettings(settings);
+
+    log("开始按当前自动刷新模式立即执行一次：" + autoRefreshModeLabel(currentSettings.autoRefreshMode) + "。");
+    return executeCurrentAutoRefreshMode({
+      settings: currentSettings,
+      pendingType: "run-auto-refresh-now",
+      silentLog: false,
+      silentToast: false,
+      silentErrorToast: false
+    });
+  }
+
   function restartAutoRefresh(options) {
     var currentSettings = normalizedSettings(settings);
 
@@ -1366,27 +2272,13 @@ export function useManagementConsole() {
     autoRefreshTimer = setInterval(function () {
       updateAutoRefreshNextRun(currentSettings.interval);
       if (!state.busy) {
-        if (currentSettings.autoRefreshMode === AUTO_REFRESH_MODES.FILES_AND_QUOTAS) {
-          // 自动刷新走“文件 + 额度”时，只补齐用户关心的两类数据，不额外触发 usage 明细同步。
-          loadAll({
-            includeUsage: false,
-            silentToast: true,
-            silentErrorToast: true,
-            silentLog: true,
-            triggerSource: "auto-refresh",
-            autoRefreshMode: currentSettings.autoRefreshMode,
-            autoRefreshInterval: currentSettings.interval
-          });
-          return;
-        }
-
-        loadFiles({
+        executeCurrentAutoRefreshMode({
+          settings: currentSettings,
           silentToast: true,
           silentErrorToast: true,
           silentLog: true,
           triggerSource: "auto-refresh",
-          autoRefreshMode: currentSettings.autoRefreshMode,
-          autoRefreshInterval: currentSettings.interval
+          progressText: "正在自动同步凭证信息…"
         });
       }
     }, currentSettings.interval * 60 * 1000);
@@ -1416,6 +2308,16 @@ export function useManagementConsole() {
     return !!state.selected[key];
   }
 
+  function clearSelectionKeys(keys) {
+    var targetKeys = Array.isArray(keys) ? keys.filter(Boolean) : [];
+    var next = Object.assign({}, state.selected);
+
+    targetKeys.forEach(function (key) {
+      delete next[key];
+    });
+    state.selected = next;
+  }
+
   function clearSelection() {
     state.selected = {};
   }
@@ -1428,23 +2330,56 @@ export function useManagementConsole() {
     ui.detailKey = "";
   }
 
+  async function openCredentialInfo(key) {
+    ui.credentialDetailKey = key || "";
+    if (!key) {
+      return;
+    }
+    var item = state.items.filter(function (current) {
+      return current.key === key;
+    })[0];
+    if (!item || !item.name) {
+      return;
+    }
+    if (item.credentialInfoStatus === "success" && item.credentialText) {
+      return;
+    }
+    await readCredentialInfo(key, {
+      pendingType: "row-credential-info",
+      silentLog: true,
+      silentToast: true
+    });
+  }
+
+  function closeCredentialInfo() {
+    ui.credentialDetailKey = "";
+  }
+
   var fileActions = useConsoleFileActions({
     api: api,
     state: state,
     settings: settings,
+    ui: ui,
     uploadInputRef: uploadInputRef,
     currentClassifierOptions: currentClassifierOptions,
+    currentTokenRefreshOptions: currentTokenRefreshOptions,
     persistCurrentSnapshot: persistCurrentSnapshot,
     updateItem: updateItem,
     reload: loadFiles,
     setBusy: setBusy,
     setProgress: setProgress,
+    completeProgressTask: completeProgressTask,
+    removeProgressTask: removeProgressTask,
     computeProgressPercent: computeProgressPercent,
     notify: notify,
     log: log,
     askConfirm: confirm.askConfirm,
     startPending: startPending,
-    finishPending: finishPending
+    finishPending: finishPending,
+    clearSelectionKeys: clearSelectionKeys,
+    showOperationDialog: showOperationDialog,
+    updateOperationDialog: updateOperationDialog,
+    closeOperationDialog: closeOperationDialog
   });
 
   var collections = computed(function () {
@@ -1474,6 +2409,12 @@ export function useManagementConsole() {
     })[0] || null;
   });
 
+  var credentialDetailItem = computed(function () {
+    return state.items.filter(function (item) {
+      return item.key === ui.credentialDetailKey;
+    })[0] || null;
+  });
+
   watch(function () {
     return [
       settings.baseUrl,
@@ -1483,7 +2424,9 @@ export function useManagementConsole() {
       settings.autoRefreshMode,
       settings.lowQuotaThreshold,
       settings.quotaConcurrency,
-      settings.quotaRequestIntervalSeconds
+      settings.quotaRequestIntervalSeconds,
+      settings.tokenRefreshConcurrency,
+      settings.tokenRefreshIntervalSeconds
     ].join("::");
   }, function () {
     writeLocalSettings();
@@ -1567,6 +2510,7 @@ export function useManagementConsole() {
     integrationSettings: integrationSettings,
     state: state,
     ui: ui,
+    operationDialog: ui.operationDialog,
     service: service,
     usageCenter: usageCenter,
     uploadInputRef: uploadInputRef,
@@ -1575,12 +2519,14 @@ export function useManagementConsole() {
     analyticsCollections: analyticsCollections,
     selectedStats: selectedStats,
     detailItem: detailItem,
+    credentialDetailItem: credentialDetailItem,
     initialize: initialize,
     loadFiles: loadFiles,
     loadAll: loadAll,
     refreshAllQuotas: refreshAllQuotas,
     refreshDisabledQuotas: refreshDisabledQuotas,
     refreshSelectedQuotas: refreshSelectedQuotas,
+    refreshSelectedCredentialInfo: refreshSelectedCredentialInfo,
     loadUsageEvents: loadUsageEvents,
     exportUsageSnapshot: exportUsageSnapshot,
     refreshServiceState: refreshServiceState,
@@ -1591,9 +2537,14 @@ export function useManagementConsole() {
     saveDefaultSettings: saveDefaultSettings,
     saveIntegrationSettings: saveIntegrationSettings,
     rescan: rescan,
+    runCurrentAutoRefreshMode: runCurrentAutoRefreshMode,
     deleteItems: fileActions.deleteItems,
     setItemsDisabled: fileActions.setItemsDisabled,
     refreshOne: fileActions.refreshOne,
+    revive401Item: fileActions.revive401Item,
+    reviveSelected401: fileActions.reviveSelected401,
+    refreshCredentialOne: fileActions.refreshCredentialOne,
+    refreshSelectedCredentials: fileActions.refreshSelectedCredentials,
     disableQuotaRelated: fileActions.disableQuotaRelated,
     deleteSelected: fileActions.deleteSelected,
     disableSelected: fileActions.disableSelected,
@@ -1610,6 +2561,10 @@ export function useManagementConsole() {
     clearSelection: clearSelection,
     openDetail: openDetail,
     closeDetail: closeDetail,
+    openCredentialInfo: openCredentialInfo,
+    closeCredentialInfo: closeCredentialInfo,
+    readCredentialInfo: readCredentialInfo,
+    closeOperationDialog: closeOperationDialog,
     notify: notify,
     log: log,
     dismissToast: dismissToast,

@@ -4,10 +4,15 @@ const path = require("path");
 const CONFIG_PATH = path.resolve(__dirname, "..", "config", "app-config.json");
 const AUTO_REFRESH_MODE_FILES = "files";
 const AUTO_REFRESH_MODE_FILES_AND_QUOTAS = "files-and-quotas";
+const TOKEN_REFRESH_CONCURRENCY_DEFAULT = 3;
+const TOKEN_REFRESH_INTERVAL_SECONDS_DEFAULT = 0;
 const DEFAULT_CONFIG = {
   management: {
     baseUrl: "",
     key: "",
+    reviveProxyUrl: "",
+    tokenRefreshConcurrency: TOKEN_REFRESH_CONCURRENCY_DEFAULT,
+    tokenRefreshIntervalSeconds: TOKEN_REFRESH_INTERVAL_SECONDS_DEFAULT,
     interval: 10,
     showFilename: false,
     autoRefresh: false,

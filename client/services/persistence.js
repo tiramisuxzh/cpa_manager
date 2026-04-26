@@ -3,6 +3,8 @@ import {
   INTEGRATION_STORE,
   SNAPSHOT_STORE,
   STORE,
+  TOKEN_REFRESH_DEFAULTS,
+  TOKEN_REFRESH_LIMITS,
   normalizeAutoRefreshMode
 } from "../lib/constants.js";
 
@@ -29,6 +31,7 @@ function snapshotItem(item) {
     unavailable: !!item.unavailable,
     runtimeOnly: !!item.runtimeOnly,
     lastRefresh: item.lastRefresh || "",
+    expired: item.expired || "",
     updatedAt: item.updatedAt || "",
     planType: item.planType || "unknown",
     quotaStatus: item.quotaStatus || "idle",
@@ -68,18 +71,23 @@ export function readSettings(config) {
   var lowQuotaThreshold = parseInt(raw.lowQuotaThreshold != null ? raw.lowQuotaThreshold : defaults.lowQuotaThreshold, 10);
   var quotaConcurrency = parseInt(raw.quotaConcurrency != null ? raw.quotaConcurrency : defaults.quotaConcurrency, 10);
   var quotaRequestIntervalSeconds = parseFloat(raw.quotaRequestIntervalSeconds != null ? raw.quotaRequestIntervalSeconds : defaults.quotaRequestIntervalSeconds);
+  var tokenRefreshConcurrency = parseInt(raw.tokenRefreshConcurrency != null ? raw.tokenRefreshConcurrency : defaults.tokenRefreshConcurrency, 10);
+  var tokenRefreshIntervalSeconds = parseFloat(raw.tokenRefreshIntervalSeconds != null ? raw.tokenRefreshIntervalSeconds : defaults.tokenRefreshIntervalSeconds);
   var autoRefreshMode = raw.autoRefreshMode != null ? raw.autoRefreshMode : defaults.autoRefreshMode;
 
   return {
     baseUrl: raw.baseUrl || defaults.baseUrl || "http://127.0.0.1:8317",
     key: defaults.key || "",
+    reviveProxyUrl: String(raw.reviveProxyUrl != null ? raw.reviveProxyUrl : defaults.reviveProxyUrl || "").trim(),
     interval: Math.max(1, parseInt(raw.interval != null ? raw.interval : defaults.interval, 10) || 10),
     showFilename: raw.showFilename != null ? !!raw.showFilename : !!defaults.showFilename,
     autoRefresh: raw.autoRefresh != null ? !!raw.autoRefresh : !!defaults.autoRefresh,
     autoRefreshMode: normalizeAutoRefreshMode(autoRefreshMode || AUTO_REFRESH_MODES.FILES),
     lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
     quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
-    quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds))
+    quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds)),
+    tokenRefreshConcurrency: Math.max(TOKEN_REFRESH_LIMITS.concurrency.min, Math.min(TOKEN_REFRESH_LIMITS.concurrency.max, Number.isNaN(tokenRefreshConcurrency) ? TOKEN_REFRESH_DEFAULTS.concurrency : tokenRefreshConcurrency)),
+    tokenRefreshIntervalSeconds: Math.max(TOKEN_REFRESH_LIMITS.intervalSeconds.min, Math.min(TOKEN_REFRESH_LIMITS.intervalSeconds.max, Number.isNaN(tokenRefreshIntervalSeconds) ? TOKEN_REFRESH_DEFAULTS.intervalSeconds : tokenRefreshIntervalSeconds))
   };
 }
 
@@ -87,16 +95,21 @@ export function writeSettings(settings) {
   var lowQuotaThreshold = parseInt(settings.lowQuotaThreshold, 10);
   var quotaConcurrency = parseInt(settings.quotaConcurrency, 10);
   var quotaRequestIntervalSeconds = parseFloat(settings.quotaRequestIntervalSeconds);
+  var tokenRefreshConcurrency = parseInt(settings.tokenRefreshConcurrency, 10);
+  var tokenRefreshIntervalSeconds = parseFloat(settings.tokenRefreshIntervalSeconds);
   try {
     localStorage.setItem(STORE, JSON.stringify({
       baseUrl: String(settings.baseUrl || "").trim().replace(/\/+$/, ""),
+      reviveProxyUrl: String(settings.reviveProxyUrl || "").trim(),
       interval: Math.max(1, parseInt(settings.interval, 10) || 10),
       showFilename: !!settings.showFilename,
       autoRefresh: !!settings.autoRefresh,
       autoRefreshMode: normalizeAutoRefreshMode(settings.autoRefreshMode || AUTO_REFRESH_MODES.FILES),
       lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
       quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
-      quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds))
+      quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds)),
+      tokenRefreshConcurrency: Math.max(TOKEN_REFRESH_LIMITS.concurrency.min, Math.min(TOKEN_REFRESH_LIMITS.concurrency.max, Number.isNaN(tokenRefreshConcurrency) ? TOKEN_REFRESH_DEFAULTS.concurrency : tokenRefreshConcurrency)),
+      tokenRefreshIntervalSeconds: Math.max(TOKEN_REFRESH_LIMITS.intervalSeconds.min, Math.min(TOKEN_REFRESH_LIMITS.intervalSeconds.max, Number.isNaN(tokenRefreshIntervalSeconds) ? TOKEN_REFRESH_DEFAULTS.intervalSeconds : tokenRefreshIntervalSeconds))
     }));
   } catch (_) {}
 }

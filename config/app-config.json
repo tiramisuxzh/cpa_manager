@@ -2,17 +2,20 @@
   "management": {
     "baseUrl": "http://localhost:8317",
     "key": "",
+    "reviveProxyUrl": "http://127.0.0.1:7890",
+    "tokenRefreshConcurrency": 5,
+    "tokenRefreshIntervalSeconds": 3,
     "interval": 30,
     "showFilename": false,
     "autoRefresh": true,
     "autoRefreshMode": "files",
     "lowQuotaThreshold": 20,
-    "quotaConcurrency": 6,
-    "quotaRequestIntervalSeconds": 1
+    "quotaConcurrency": 12,
+    "quotaRequestIntervalSeconds": 2
   },
   "integrations": {
     "wenfxlOpenai": {
-      "url": "http://127.0.0.1:8000/"
+      "url": ""
     }
   },
   "remote": {

@@ -1,12 +1,14 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+import CredentialInfoDrawer from "./components/CredentialInfoDrawer.vue";
 import DisabledPoolView from "./components/DisabledPoolView.vue";
 import ExceptionCenterView from "./components/ExceptionCenterView.vue";
 import ExternalIntegrationView from "./components/ExternalIntegrationView.vue";
 import FileDetailDrawer from "./components/FileDetailDrawer.vue";
 import FilePoolView from "./components/FilePoolView.vue";
 import IntegrationSettingsView from "./components/IntegrationSettingsView.vue";
+import OperationProgressDialog from "./components/OperationProgressDialog.vue";
 import QuotaPoolView from "./components/QuotaPoolView.vue";
 import RequestEventsView from "./components/RequestEventsView.vue";
 import SettingsView from "./components/SettingsView.vue";
@@ -252,15 +254,15 @@ var autoRefreshFooter = computed(function () {
     nextRun: info.nextRunAt ? ("下次预计 " + info.nextRunAt) : ""
   };
 });
-
-var progressStyle = computed(function () {
-  return {
-    width: consoleApp.state.progressPercent + "%"
-  };
+var progressTasks = computed(function () {
+  return Array.isArray(consoleApp.state.progressTasks) ? consoleApp.state.progressTasks : [];
 });
 
 var detailItem = computed(function () {
   return consoleApp.detailItem.value;
+});
+var credentialDetailItem = computed(function () {
+  return consoleApp.credentialDetailItem.value;
 });
 
 function pendingText(type, idleText, loadingText) {
@@ -271,8 +273,42 @@ function workbenchPending() {
   return consoleApp.hasPending(PENDING_GROUPS.workbench);
 }
 
+function progressTaskStyle(task) {
+  return {
+    width: Math.max(0, Math.min(100, Number(task && task.percent) || 0)) + "%"
+  };
+}
+
+function progressTaskCount(task) {
+  if (task && task.total) {
+    return (task.done || 0) + "/" + task.total;
+  }
+  return (Math.max(0, Math.min(100, Number(task && task.percent) || 0))) + "%";
+}
+
+function progressTaskTone(task) {
+  return task && task.tone ? String(task.tone) : "info";
+}
+
+function progressTaskState(task) {
+  if (task && task.active) {
+    return "处理中";
+  }
+  if (progressTaskTone(task) === "danger") {
+    return "失败";
+  }
+  if (progressTaskTone(task) === "warn") {
+    return "已完成（部分异常）";
+  }
+  return "已完成";
+}
+
 function openDetail(item) {
   consoleApp.openDetail(item && item.key);
+}
+
+function openCredential(item) {
+  consoleApp.openCredentialInfo(item && item.key);
 }
 
 function isSectionCollapsed(sectionId) {
@@ -398,9 +434,9 @@ onMounted(function () {
             type="button"
             :disabled="workbenchPending()"
             :aria-busy="consoleApp.isPending('refresh-files') ? 'true' : 'false'"
-            @click="consoleApp.loadFiles({ pendingType: 'refresh-files' })"
+            @click="consoleApp.loadFiles({ pendingType: 'refresh-files', includeCredentialInfo: true })"
           >
-            <span class="button-label" :class="{ pending: consoleApp.isPending('refresh-files') }">{{ pendingText('refresh-files', '刷新文件列表', '刷新中') }}</span>
+            <span class="button-label" :class="{ pending: consoleApp.isPending('refresh-files') }">{{ pendingText('refresh-files', '刷新文件与凭证', '刷新中') }}</span>
           </button>
           <button
             v-if="currentRoute.showRescan"
@@ -415,21 +451,38 @@ onMounted(function () {
         </div>
       </header>
 
-      <section v-if="!immersiveRoute && (consoleApp.state.progressVisible || consoleApp.state.busy)" class="progress-strip surface-card">
-        <div class="progress-copy">
-          <strong>{{ consoleApp.state.progressVisible ? consoleApp.state.progressText : "当前无长任务" }}</strong>
-          <span>{{ consoleApp.state.progress.done }}/{{ consoleApp.state.progress.total || "-" }}</span>
+      <section v-if="!immersiveRoute && progressTasks.length" class="progress-strip surface-card">
+        <div class="progress-strip-head">
+          <strong>当前执行中的操作</strong>
+          <span>{{ progressTasks.length }} 个任务</span>
         </div>
-        <div class="progress-track">
-          <span class="progress-value" :style="progressStyle"></span>
+        <div class="progress-list">
+          <article
+            v-for="task in progressTasks"
+            :key="task.id"
+            class="progress-item"
+            :data-tone="progressTaskTone(task)"
+            :class="{ completed: !task.active }"
+          >
+            <div class="progress-copy">
+              <strong>{{ task.text || "任务进行中…" }}</strong>
+              <span>{{ progressTaskState(task) }}</span>
+            </div>
+            <div class="progress-meta">
+              <span>{{ progressTaskCount(task) }}</span>
+            </div>
+            <div class="progress-track">
+              <span class="progress-value" :style="progressTaskStyle(task)"></span>
+            </div>
+          </article>
         </div>
       </section>
 
       <main class="workspace-body" :class="{ immersive: immersiveRoute }">
-        <FilePoolView v-if="activeRoute === 'files'" :console-app="consoleApp" :on-open-detail="openDetail" />
-        <QuotaPoolView v-else-if="activeRoute === 'quotas'" :console-app="consoleApp" :on-open-detail="openDetail" />
-        <DisabledPoolView v-else-if="activeRoute === 'disabled'" :console-app="consoleApp" :on-open-detail="openDetail" />
-        <ExceptionCenterView v-else-if="activeRoute === 'exceptions'" :console-app="consoleApp" :on-open-detail="openDetail" />
+        <FilePoolView v-if="activeRoute === 'files'" :console-app="consoleApp" :on-open-detail="openDetail" :on-open-credential="openCredential" />
+        <QuotaPoolView v-else-if="activeRoute === 'quotas'" :console-app="consoleApp" :on-open-detail="openDetail" :on-open-credential="openCredential" />
+        <DisabledPoolView v-else-if="activeRoute === 'disabled'" :console-app="consoleApp" :on-open-detail="openDetail" :on-open-credential="openCredential" />
+        <ExceptionCenterView v-else-if="activeRoute === 'exceptions'" :console-app="consoleApp" :on-open-detail="openDetail" :on-open-credential="openCredential" />
         <RequestEventsView v-else-if="activeRoute === 'usage-events'" :console-app="consoleApp" />
         <SettingsView v-else-if="activeRoute === 'settings'" :console-app="consoleApp" />
         <IntegrationSettingsView v-else-if="activeRoute === 'integration-settings'" :console-app="consoleApp" @open-route="switchRoute" />
@@ -458,13 +511,22 @@ onMounted(function () {
       :has-pending="consoleApp.hasPending"
       @close="consoleApp.closeDetail"
       @refresh="consoleApp.refreshOne($event.key)"
+      @refresh-credential="consoleApp.refreshCredentialOne($event.key)"
+      @credential="openCredential"
       @copy="consoleApp.copyName($event.name)"
       @toggle-disabled="consoleApp.setFileDisabled($event, !$event.disabled)"
       @delete="consoleApp.deleteFile"
     />
+    <CredentialInfoDrawer
+      :item="credentialDetailItem"
+      :is-pending="consoleApp.isPending"
+      @close="consoleApp.closeCredentialInfo"
+      @refresh="consoleApp.readCredentialInfo($event.key, { pendingType: 'row-credential-info' })"
+    />
 
     <ToastStack :toasts="consoleApp.state.toasts" @dismiss="consoleApp.dismissToast" />
     <ConfirmDialog :dialog="consoleApp.confirmDialog" @confirm="consoleApp.confirmAction" @cancel="consoleApp.cancelConfirm" />
+    <OperationProgressDialog :dialog="consoleApp.operationDialog" @close="consoleApp.closeOperationDialog" />
   </div>
 </template>
 
@@ -809,6 +871,44 @@ onMounted(function () {
   gap: 10px;
 }
 
+.progress-strip-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.progress-strip-head strong {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.progress-strip-head span {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.progress-list {
+  display: grid;
+  gap: 10px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.progress-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(24, 34, 52, 0.06);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.progress-item.completed {
+  opacity: 0.92;
+}
+
 .progress-copy {
   display: flex;
   justify-content: space-between;
@@ -827,6 +927,17 @@ onMounted(function () {
   font-size: 12px;
 }
 
+.progress-meta {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.progress-meta span {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .progress-track {
   width: 100%;
   height: 10px;
@@ -842,6 +953,21 @@ onMounted(function () {
   background: linear-gradient(90deg, #1677ff, #14b8a6, #22c55e);
   box-shadow: 0 0 28px rgba(22, 119, 255, 0.24);
   transition: width 0.2s ease;
+}
+
+.progress-item[data-tone="success"] .progress-value {
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+  box-shadow: 0 0 24px rgba(22, 163, 74, 0.2);
+}
+
+.progress-item[data-tone="warn"] .progress-value {
+  background: linear-gradient(90deg, #f59e0b, #d97706);
+  box-shadow: 0 0 24px rgba(217, 119, 6, 0.2);
+}
+
+.progress-item[data-tone="danger"] .progress-value {
+  background: linear-gradient(90deg, #ef4444, #dc2626);
+  box-shadow: 0 0 24px rgba(220, 38, 38, 0.2);
 }
 
 .workspace-body {

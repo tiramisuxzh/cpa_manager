@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { PENDING_GROUPS } from "../lib/constants.js";
-import { fmt, quotaMetricCards, quotaResetText } from "../lib/utils.js";
+import { fmt, quotaMetricCards, quotaResetText, rawTimeText } from "../lib/utils.js";
 
 var props = defineProps({
   item: {
@@ -21,6 +21,8 @@ var props = defineProps({
 var emit = defineEmits([
   "close",
   "refresh",
+  "refresh-credential",
+  "credential",
   "copy",
   "toggle-disabled",
   "delete"
@@ -40,25 +42,42 @@ onBeforeUnmount(function () {
   window.removeEventListener("keydown", closeOnEscape);
 });
 
+function buildDetailTimeRow(label, value) {
+  if (!value) {
+    return {
+      label: label,
+      value: "未写入",
+      hint: ""
+    };
+  }
+
+  return {
+    label: label + "（本地）",
+    value: fmt(value, true, { withSeconds: true }),
+    hint: "原始值 " + rawTimeText(value)
+  };
+}
+
 var detailRows = computed(function () {
   if (!props.item) {
     return [];
   }
 
   return [
-    ["文件名", props.item.name || "未命名"],
-    ["账号", props.item.email || "未知"],
-    ["平台", props.item.provider || "codex"],
-    ["状态", props.item.status || "unknown"],
-    ["额度接口", props.item.requestStatusText || "等待请求"],
-    ["额度状态", props.item.quotaStateLabel || "等待额度"],
-    ["健康度", props.item.health || "待获取"],
-    ["套餐", props.item.planType || "unknown"],
-    ["账号类型", props.item.accountType || "未标注"],
-    ["异常分类", props.item.badReasonLabel || (props.item.tone === "warn" ? props.item.quotaStateLabel : "无")],
-    ["文件开关", props.item.disabled ? "已停用" : "启用中"],
-    ["额度重置", quotaResetText(props.item, true, " / ")],
-    ["最近刷新", fmt(props.item.lastRefresh || props.item.updatedAt, true)]
+    { label: "文件名", value: props.item.name || "未命名", hint: "" },
+    { label: "账号", value: props.item.email || "未知", hint: "" },
+    { label: "平台", value: props.item.provider || "codex", hint: "" },
+    { label: "状态", value: props.item.status || "unknown", hint: "" },
+    { label: "额度接口", value: props.item.requestStatusText || "等待请求", hint: "" },
+    { label: "额度状态", value: props.item.quotaStateLabel || "等待额度", hint: "" },
+    { label: "健康度", value: props.item.health || "待获取", hint: "" },
+    { label: "套餐", value: props.item.planType || "unknown", hint: "" },
+    { label: "账号类型", value: props.item.accountType || "未标注", hint: "" },
+    { label: "异常分类", value: props.item.badReasonLabel || (props.item.tone === "warn" ? props.item.quotaStateLabel : "无"), hint: "" },
+    { label: "文件开关", value: props.item.disabled ? "已停用" : "启用中", hint: "" },
+    { label: "额度重置", value: quotaResetText(props.item, true, " / "), hint: "" },
+    buildDetailTimeRow("凭证最近刷新", props.item.lastRefresh),
+    buildDetailTimeRow("Access Token 过期", props.item.expired)
   ];
 });
 
@@ -79,8 +98,8 @@ var advice = computed(function () {
   }
   if (props.item.badReasonGroup === "auth-401") {
     return {
-      title: "建议优先替换或删除",
-      body: "401 往往意味着认证凭证已失效，这类文件自恢复概率低，通常更适合直接替换或删除。",
+      title: "建议先做认证续期",
+      body: "401 往往意味着认证凭证已失效。优先先做一次认证续期，把新的 token 回写成功后，再观察是否恢复；如果续期仍失败，再删会更稳。",
       tone: "tone-danger"
     };
   }
@@ -192,6 +211,12 @@ function deleteDisabled() {
               <button class="primary-btn" type="button" :disabled="refreshDisabled()" :aria-busy="isPending('row-refresh', item.key) ? 'true' : 'false'" @click="emit('refresh', item)">
                 <span class="button-label" :class="{ pending: isPending('row-refresh', item.key) }">{{ pendingText('row-refresh', '刷新额度', '刷新中', item.key) }}</span>
               </button>
+              <button class="secondary-btn" type="button" :disabled="!item.name || item.runtimeOnly" :aria-busy="isPending('row-credential-info', item.key) ? 'true' : 'false'" @click="emit('credential', item)">
+                <span class="button-label" :class="{ pending: isPending('row-credential-info', item.key) }">{{ pendingText('row-credential-info', '同步凭证信息', '同步中', item.key) }}</span>
+              </button>
+              <button class="secondary-btn" type="button" :disabled="!item.name || item.runtimeOnly || workbenchPending() || currentRowPending()" :aria-busy="isPending('row-refresh-credential', item.key) ? 'true' : 'false'" @click="emit('refresh-credential', item)">
+                <span class="button-label" :class="{ pending: isPending('row-refresh-credential', item.key) }">{{ pendingText('row-refresh-credential', '认证续期', '续期中', item.key) }}</span>
+              </button>
               <button class="secondary-btn" type="button" :disabled="!item.name" @click="emit('copy', item)">复制文件名</button>
               <button class="secondary-btn" type="button" :disabled="toggleDisabled()" :aria-busy="isPending('row-toggle-disabled', item.key) ? 'true' : 'false'" @click="emit('toggle-disabled', item)">
                 <span class="button-label" :class="{ pending: isPending('row-toggle-disabled', item.key) }">{{ pendingText('row-toggle-disabled', item.disabled ? '启用文件' : '停用文件', item.disabled ? '启用中' : '停用中', item.key) }}</span>
@@ -242,9 +267,12 @@ function deleteDisabled() {
             </div>
 
             <dl class="detail-grid">
-              <template v-for="row in detailRows" :key="row[0]">
-                <dt>{{ row[0] }}</dt>
-                <dd>{{ row[1] }}</dd>
+              <template v-for="row in detailRows" :key="row.label">
+                <dt>{{ row.label }}</dt>
+                <dd>
+                  <span>{{ row.value }}</span>
+                  <small v-if="row.hint" class="detail-hint">{{ row.hint }}</small>
+                </dd>
               </template>
             </dl>
           </section>
@@ -467,10 +495,18 @@ function deleteDisabled() {
 
 .detail-grid dd {
   margin: 0;
+  display: grid;
+  gap: 4px;
   color: var(--text-strong);
   font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+.detail-hint {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .drawer-fade-enter-active,

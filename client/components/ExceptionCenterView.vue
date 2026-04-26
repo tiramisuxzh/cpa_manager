@@ -1,5 +1,6 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
+import ActionIconButton from "./ActionIconButton.vue";
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS } from "../lib/constants.js";
 import { buildPlanTypeOptions, fmt, planTypeFilterValue, sortItems } from "../lib/utils.js";
 
@@ -9,6 +10,10 @@ var props = defineProps({
     required: true
   },
   onOpenDetail: {
+    type: Function,
+    required: true
+  },
+  onOpenCredential: {
     type: Function,
     required: true
   }
@@ -74,7 +79,9 @@ var selectionStats = computed(function () {
     total: selected.length,
     deletable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
     disableable: selected.filter(function (item) { return item.name && !item.runtimeOnly && !item.disabled; }).length,
-    refreshable: selected.filter(function (item) { return item.authIndex && item.accountId; }).length
+    refreshable: selected.filter(function (item) { return item.authIndex && item.accountId; }).length,
+    credentialInfoRefreshable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
+    credentialRefreshable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length
   };
 });
 
@@ -94,7 +101,7 @@ var groupMeta = computed(function () {
   if (filters.group === "auth-401") {
     return {
       title: "401 认证异常",
-      body: "这类文件恢复概率低，优先删除或替换凭证最省心。",
+      body: "这类文件优先先做认证续期；续期失败或仍未恢复时，再删除会更稳妥。",
       tone: "danger",
       button: "删除当前分类",
       pendingType: "delete-selected"
@@ -156,7 +163,7 @@ function rowClass() {
 
 function actionAdvice(item) {
   if (item.badReasonGroup === "auth-401") {
-    return "建议删除";
+    return "先做认证续期";
   }
   if (item.badReasonGroup === "quota") {
     return item.disabled ? "等待恢复后启用" : "建议停用";
@@ -236,6 +243,12 @@ function pageSizeText(size) {
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.refreshable" :aria-busy="props.consoleApp.isPending('refresh-selected-quotas') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedQuotas">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-selected-quotas') }">{{ pendingText('refresh-selected-quotas', '刷新选中额度', '刷新中') }}</span>
           </button>
+          <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.credentialInfoRefreshable" :aria-busy="props.consoleApp.isPending('refresh-credential-info-selected') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedCredentialInfo">
+            <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-credential-info-selected') }">{{ pendingText('refresh-credential-info-selected', '同步选中凭证信息', '同步凭证中') }}</span>
+          </button>
+          <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.credentialRefreshable" :aria-busy="props.consoleApp.isPending('refresh-credentials-selected') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedCredentials">
+            <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-credentials-selected') }">{{ pendingText('refresh-credentials-selected', '批量认证续期', '续期中') }}</span>
+          </button>
           <button v-if="filters.group === 'quota'" class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.disableable" :aria-busy="props.consoleApp.isPending('disable-selected') ? 'true' : 'false'" @click="props.consoleApp.disableSelected">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('disable-selected') }">{{ pendingText('disable-selected', '停用选中', '停用中') }}</span>
           </button>
@@ -311,7 +324,7 @@ function pageSizeText(size) {
 
           <div class="row-cell">
             <strong>{{ actionAdvice(item) }}</strong>
-            <span>{{ filters.group === "quota" ? (item.disabled ? "当前已停用" : "建议停用观察") : "删除前建议先打开详情确认" }}</span>
+            <span>{{ filters.group === "quota" ? (item.disabled ? "当前已停用" : "建议停用观察") : (filters.group === "auth-401" ? "建议先做认证续期，失败后再删" : "删除前建议先打开详情确认") }}</span>
           </div>
 
           <div class="row-cell">
@@ -320,16 +333,48 @@ function pageSizeText(size) {
           </div>
 
           <div class="row-cell action-cell">
-            <button class="mini-btn" type="button" @click="props.onOpenDetail(item)">详情</button>
-            <button class="mini-btn" type="button" :disabled="workbenchPending() || rowPending(item) || !item.authIndex || !item.accountId" :aria-busy="props.consoleApp.isPending('row-refresh', item.key) ? 'true' : 'false'" @click="props.consoleApp.refreshOne(item.key)">
-              <span class="button-label" :class="{ pending: props.consoleApp.isPending('row-refresh', item.key) }">{{ pendingText('row-refresh', '刷新', '刷新中', item.key) }}</span>
-            </button>
-            <button v-if="filters.group === 'quota'" class="mini-btn" type="button" :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly" :aria-busy="props.consoleApp.isPending('row-toggle-disabled', item.key) ? 'true' : 'false'" @click="props.consoleApp.setFileDisabled(item, !item.disabled)">
-              <span class="button-label" :class="{ pending: props.consoleApp.isPending('row-toggle-disabled', item.key) }">{{ pendingText('row-toggle-disabled', item.disabled ? '启用' : '停用', item.disabled ? '启用中' : '停用中', item.key) }}</span>
-            </button>
-            <button v-else class="mini-btn danger" type="button" :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly" :aria-busy="props.consoleApp.isPending('row-delete', item.key) ? 'true' : 'false'" @click="props.consoleApp.deleteFile(item)">
-              <span class="button-label" :class="{ pending: props.consoleApp.isPending('row-delete', item.key) }">{{ pendingText('row-delete', '删除', '删除中', item.key) }}</span>
-            </button>
+            <ActionIconButton title="查看详情" icon="detail" @click="props.onOpenDetail(item)" />
+            <ActionIconButton
+              title="同步凭证信息"
+              icon="credential-info"
+              tone="accent"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-credential-info', item.key)"
+              @click="props.onOpenCredential(item)"
+            />
+            <ActionIconButton
+              title="认证续期"
+              icon="credential-refresh"
+              tone="accent"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-refresh-credential', item.key)"
+              @click="props.consoleApp.refreshCredentialOne(item.key)"
+            />
+            <ActionIconButton
+              title="刷新额度"
+              icon="refresh"
+              :disabled="workbenchPending() || rowPending(item) || !item.authIndex || !item.accountId"
+              :pending="props.consoleApp.isPending('row-refresh', item.key)"
+              @click="props.consoleApp.refreshOne(item.key)"
+            />
+            <ActionIconButton
+              v-if="filters.group === 'quota'"
+              :title="item.disabled ? '启用文件' : '停用文件'"
+              :icon="item.disabled ? 'enable' : 'disable'"
+              tone="warn"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-toggle-disabled', item.key)"
+              @click="props.consoleApp.setFileDisabled(item, !item.disabled)"
+            />
+            <ActionIconButton
+              v-else
+              title="删除文件"
+              icon="delete"
+              tone="danger"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-delete', item.key)"
+              @click="props.consoleApp.deleteFile(item)"
+            />
           </div>
         </article>
       </div>
@@ -481,7 +526,7 @@ function pageSizeText(size) {
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 40px minmax(220px, 1.1fr) minmax(280px, 1.5fr) minmax(180px, 0.9fr) minmax(150px, 0.8fr) minmax(240px, 1fr);
+  grid-template-columns: 40px minmax(220px, 1.1fr) minmax(280px, 1.5fr) minmax(180px, 0.9fr) minmax(150px, 0.8fr) minmax(156px, 0.72fr);
   gap: 12px;
   align-items: center;
 }
@@ -608,7 +653,7 @@ function pageSizeText(size) {
 
   .table-head,
   .table-row {
-    grid-template-columns: 40px minmax(180px, 1fr) minmax(220px, 1.3fr) minmax(170px, 0.8fr) minmax(130px, 0.7fr) minmax(220px, 0.9fr);
+    grid-template-columns: 40px minmax(180px, 1fr) minmax(220px, 1.3fr) minmax(170px, 0.8fr) minmax(130px, 0.7fr) minmax(156px, 0.76fr);
   }
 }
 

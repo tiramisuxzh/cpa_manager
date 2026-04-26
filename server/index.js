@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const { readConfig, clientConfig, serverConfig, writeManagementConfig, writeIntegrationConfig } = require("./config");
+const { readAuthFileDetail, refreshAuthCredential, reviveAuthFile } = require("./revive");
 
 const APP_CONFIG = readConfig();
 const SERVER_OPTIONS = serverConfig(APP_CONFIG);
@@ -130,6 +131,74 @@ app.patch("/api/integrations-config", requireTrustedRequest, (req, res) => {
     res.json(clientConfig(updated));
   } catch (error) {
     res.status(500).json({ error: error && error.message ? error.message : "保存集成配置失败" });
+  }
+});
+
+app.post("/api/auth-file-detail", requireTrustedRequest, async (req, res) => {
+  const input = req.body && typeof req.body === "object" ? req.body : null;
+  const management = input && input.management;
+  const item = input && input.item;
+
+  if (!input || !management || typeof management !== "object" || Array.isArray(management) || !item || typeof item !== "object" || Array.isArray(item)) {
+    res.status(400).json({ error: "凭证信息请求格式不正确" });
+    return;
+  }
+  if (!String(management.baseUrl || "").trim() || !String(management.key || "").trim() || !String(item.name || "").trim()) {
+    res.status(400).json({ error: "缺少管理地址、Management Key 或文件名" });
+    return;
+  }
+
+  try {
+    res.json(await readAuthFileDetail(input));
+  } catch (error) {
+    console.error("[auth-file-detail] failed:", error);
+    res.status(500).json({ error: error && error.message ? error.message : "读取凭证信息失败" });
+  }
+});
+
+app.post("/api/revive-auth-file", requireTrustedRequest, async (req, res) => {
+  const input = req.body && typeof req.body === "object" ? req.body : null;
+  const management = input && input.management;
+  const item = input && input.item;
+
+  // 复活接口只接受显式的管理配置和文件信息，避免浏览器误传空结构时把异常吞成“静默成功”。
+  if (!input || !management || typeof management !== "object" || Array.isArray(management) || !item || typeof item !== "object" || Array.isArray(item)) {
+    res.status(400).json({ error: "复活请求格式不正确" });
+    return;
+  }
+  if (!String(management.baseUrl || "").trim() || !String(management.key || "").trim() || !String(item.name || "").trim()) {
+    res.status(400).json({ error: "缺少管理地址、Management Key 或文件名" });
+    return;
+  }
+
+  try {
+    res.json(await reviveAuthFile(input));
+  } catch (error) {
+    console.error("[revive-auth-file] failed:", error);
+    res.status(500).json({ error: error && error.message ? error.message : "尝试复活失败" });
+  }
+});
+
+app.post("/api/refresh-auth-file", requireTrustedRequest, async (req, res) => {
+  const input = req.body && typeof req.body === "object" ? req.body : null;
+  const management = input && input.management;
+  const item = input && input.item;
+
+  // 批量凭证保活和复活共用同一份参数校验，确保开发态与生产态都只接受显式的管理配置和文件信息。
+  if (!input || !management || typeof management !== "object" || Array.isArray(management) || !item || typeof item !== "object" || Array.isArray(item)) {
+    res.status(400).json({ error: "凭证刷新请求格式不正确" });
+    return;
+  }
+  if (!String(management.baseUrl || "").trim() || !String(management.key || "").trim() || !String(item.name || "").trim()) {
+    res.status(400).json({ error: "缺少管理地址、Management Key 或文件名" });
+    return;
+  }
+
+  try {
+    res.json(await refreshAuthCredential(input));
+  } catch (error) {
+    console.error("[refresh-auth-file] failed:", error);
+    res.status(500).json({ error: error && error.message ? error.message : "刷新凭证失败" });
   }
 });
 

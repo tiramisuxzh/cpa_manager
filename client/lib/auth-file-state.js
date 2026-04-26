@@ -121,32 +121,84 @@ function quotaLimitReached(limit) {
   return readFlag(limit.allowed) === false || readFlag(limit.limit_reached) === true || readFlag(limit.limitReached) === true;
 }
 
-function lowQuotaSignals(chatQuota, chatQuotaSecondary, codeQuota, threshold) {
-  return {
-    lowChat: !!(
-      (chatQuota && chatQuota.left != null && chatQuota.left <= threshold)
-      || (chatQuotaSecondary && chatQuotaSecondary.left != null && chatQuotaSecondary.left <= threshold)
-    ),
-    lowCode: !!(codeQuota && codeQuota.left != null && codeQuota.left <= threshold)
-  };
+function quotaLeftValue(quota) {
+  if (!quota || typeof quota !== "object") {
+    return null;
+  }
+  if (isNum(quota.leftRaw)) {
+    return quota.leftRaw;
+  }
+  if (isNum(quota.left)) {
+    return quota.left;
+  }
+  return null;
 }
 
-function buildQuotaBadState(payload, chatBlocked, codeBlocked) {
+function isQuotaExhausted(quota) {
+  var left = quotaLeftValue(quota);
+  return left != null && left <= 0;
+}
+
+function isQuotaLow(quota, threshold) {
+  var left = quotaLeftValue(quota);
+  return left != null && left > 0 && left <= threshold;
+}
+
+function moreConstrainedQuota(current, candidate) {
+  var currentLeft = quotaLeftValue(current);
+  var candidateLeft = quotaLeftValue(candidate);
+
+  if (candidateLeft == null) {
+    return current;
+  }
+  if (currentLeft == null || candidateLeft < currentLeft) {
+    return candidate;
+  }
+  return current;
+}
+
+function selectSessionQuota(chatQuota, chatQuotaSecondary, predicate) {
+  var result = null;
+
+  [chatQuota, chatQuotaSecondary].forEach(function (quota) {
+    if (quota && (!predicate || predicate(quota))) {
+      result = moreConstrainedQuota(result, quota);
+    }
+  });
+  return result;
+}
+
+function sessionQuotaLabel(quota, suffix) {
+  if (quota && quota.label === "5 小时窗口") {
+    return "对话 5 小时额度" + suffix;
+  }
+  if (quota && quota.label === "周窗口") {
+    return "对话周额度" + suffix;
+  }
+  return "对话额度" + suffix;
+}
+
+function sessionQuotaReason(quota, middleText, suffix) {
+  return sessionQuotaLabel(quota, "") + middleText + suffix;
+}
+
+function buildQuotaBadState(payload, chatBlocked, codeBlocked, chatQuota, chatQuotaSecondary) {
   var spendControlReached = !!(payload && payload.spend_control && readFlag(payload.spend_control.reached));
   var overageLimitReached = !!(payload && payload.credits && readFlag(payload.credits.overage_limit_reached));
+  var blockedChatQuota = selectSessionQuota(chatQuota, chatQuotaSecondary, isQuotaExhausted);
 
   if (chatBlocked && codeBlocked) {
     return {
       code: "quota-both",
       label: "对话/代码额度已用尽",
-      reason: "对话周额度与代码审查周额度均已用尽，等待重置后恢复。"
+      reason: (blockedChatQuota ? (sessionQuotaLabel(blockedChatQuota, "") + "与代码审查额度均已用尽，等待重置后恢复。") : "对话额度与代码审查额度均已用尽，等待重置后恢复。")
     };
   }
   if (chatBlocked) {
     return {
       code: "quota-chat",
-      label: "对话额度已用尽",
-      reason: "对话额度已用尽，等待重置后恢复。"
+      label: sessionQuotaLabel(blockedChatQuota, "已用尽"),
+      reason: sessionQuotaReason(blockedChatQuota, "已用尽，", "等待重置后恢复。")
     };
   }
   if (codeBlocked) {
@@ -174,23 +226,26 @@ function buildQuotaBadState(payload, chatBlocked, codeBlocked) {
 }
 
 function buildWarnState(chatQuota, chatQuotaSecondary, codeQuota, threshold) {
-  var signals = lowQuotaSignals(chatQuota, chatQuotaSecondary, codeQuota, threshold);
+  var lowChatQuota = selectSessionQuota(chatQuota, chatQuotaSecondary, function (quota) {
+    return isQuotaLow(quota, threshold);
+  });
+  var lowCode = isQuotaLow(codeQuota, threshold);
 
-  if (signals.lowChat && signals.lowCode) {
+  if (lowChatQuota && lowCode) {
     return {
       code: "warn-both",
       label: "双额度预警",
-      reason: "对话周额度与代码审查周额度都低于等于预警阈值（<= " + threshold + "%）。"
+      reason: sessionQuotaReason(lowChatQuota, "低于等于预警阈值（<= " + threshold + "%），", "代码审查额度也已进入预警。")
     };
   }
-  if (signals.lowChat) {
+  if (lowChatQuota) {
     return {
       code: "warn-chat",
-      label: "对话额度预警",
-      reason: "对话额度低于等于预警阈值（<= " + threshold + "%）。"
+      label: sessionQuotaLabel(lowChatQuota, "预警"),
+      reason: sessionQuotaReason(lowChatQuota, "低于等于预警阈值（<= " + threshold + "%）。", "")
     };
   }
-  if (signals.lowCode) {
+  if (lowCode) {
     return {
       code: "warn-code",
       label: "代码审查额度预警",
@@ -278,8 +333,44 @@ export function averageSessionLeftPercent(state) {
   return usable.length ? avg(usable) : null;
 }
 
+function nestedAuthSources(file) {
+  return [
+    file,
+    file && file.raw,
+    file && file.full_item_data,
+    file && file.fullItemData,
+    file && file.item_data,
+    file && file.itemData,
+    file && file.auth_file,
+    file && file.authFile,
+    file && file.data,
+    file && file.source
+  ].filter(function (item) {
+    return item && typeof item === "object";
+  });
+}
+
+function readAuthField(file, keys, fallback) {
+  var names = Array.isArray(keys) ? keys : [keys];
+  var sources = nestedAuthSources(file);
+  var sourceIndex;
+  var keyIndex;
+  var value;
+
+  for (sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+    for (keyIndex = 0; keyIndex < names.length; keyIndex += 1) {
+      value = sources[sourceIndex][names[keyIndex]];
+      if (value != null && value !== "") {
+        return value;
+      }
+    }
+  }
+
+  return fallback;
+}
+
 export function baseItem(file, index) {
-  var token = file.id_token || {};
+  var token = readAuthField(file, ["id_token", "idToken"], {}) || {};
   var email = file.email || file.account || file.label || file.name || ("item-" + index);
   return {
     key: (file.name || file.id || email) + "::" + index,
@@ -295,7 +386,13 @@ export function baseItem(file, index) {
     disabled: !!file.disabled,
     unavailable: !!file.unavailable,
     runtimeOnly: !!file.runtime_only || !!file.runtimeOnly,
-    lastRefresh: file.last_refresh || file.lastRefresh || "",
+    lastRefresh: readAuthField(file, ["last_refresh", "lastRefresh"], ""),
+    expired: readAuthField(file, ["expired", "expires_at", "expiresAt"], ""),
+    credentialInfoStatus: "idle",
+    credentialInfoError: "",
+    credentialFetchedAt: "",
+    credentialContent: null,
+    credentialText: "",
     updatedAt: file.updated_at || file.updatedAt || file.modtime || "",
     planType: token.plan_type || token.planType || "unknown",
     quotaStatus: "idle",
@@ -329,8 +426,8 @@ export function enrichItem(item, result, classifierOptions) {
   var chatQuota = selectWindow(chat);
   var chatQuotaSecondary = selectSecondaryWindow(chat);
   var codeQuota = selectWindow(code);
-  var chatBlocked = quotaLimitReached(chat);
-  var codeBlocked = quotaLimitReached(code);
+  var chatBlocked = quotaLimitReached(chat) || isQuotaExhausted(chatQuota) || isQuotaExhausted(chatQuotaSecondary);
+  var codeBlocked = quotaLimitReached(code) || isQuotaExhausted(codeQuota);
   var promoMessage = extractPromoMessage(payload);
   var warnState;
   var badState;
@@ -343,7 +440,7 @@ export function enrichItem(item, result, classifierOptions) {
     });
   }
 
-  badState = buildQuotaBadState(payload, chatBlocked, codeBlocked);
+  badState = buildQuotaBadState(payload, chatBlocked, codeBlocked, chatQuota, chatQuotaSecondary);
   warnState = buildWarnState(chatQuota, chatQuotaSecondary, codeQuota, options.lowQuotaThreshold);
 
   if (badState) {
@@ -364,7 +461,7 @@ export function enrichItem(item, result, classifierOptions) {
       health: "异常",
       badReasonGroup: "quota",
       badReasonCode: badState.code,
-      badReasonLabel: badReasonLabel("quota", badState.code),
+      badReasonLabel: badState.label || badReasonLabel("quota", badState.code),
       reason: badState.reason
     });
   }

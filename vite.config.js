@@ -4,6 +4,7 @@ import vue from "@vitejs/plugin-vue";
 
 const require = createRequire(import.meta.url);
 const { readConfig, clientConfig, writeManagementConfig, writeIntegrationConfig } = require("./server/config");
+const { readAuthFileDetail, refreshAuthCredential, reviveAuthFile } = require("./server/revive");
 
 function readRequestBody(req) {
   return new Promise(function (resolve, reject) {
@@ -27,6 +28,12 @@ function readRequestBody(req) {
   });
 }
 
+function sendJson(res, statusCode, payload) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(payload));
+}
+
 function localAppConfigPlugin() {
   return {
     name: "local-app-config",
@@ -39,8 +46,7 @@ function localAppConfigPlugin() {
         }
 
         if (req.method === "GET") {
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify(clientConfig(readConfig())));
+          sendJson(res, 200, clientConfig(readConfig()));
           return;
         }
 
@@ -50,18 +56,13 @@ function localAppConfigPlugin() {
 
           // 开发环境同样只允许回写 management 默认配置，避免 Vite 与正式服务的行为不一致。
           if (!input || typeof input !== "object" || Array.isArray(input)) {
-            res.statusCode = 400;
-            res.setHeader("Content-Type", "application/json; charset=utf-8");
-            res.end(JSON.stringify({ error: "management 配置格式不正确" }));
+            sendJson(res, 400, { error: "management 配置格式不正确" });
             return;
           }
 
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify(clientConfig(writeManagementConfig(input))));
+          sendJson(res, 200, clientConfig(writeManagementConfig(input)));
         } catch (error) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify({ error: error && error.message ? error.message : "保存默认配置失败" }));
+          sendJson(res, 500, { error: error && error.message ? error.message : "保存默认配置失败" });
         }
       });
 
@@ -77,18 +78,93 @@ function localAppConfigPlugin() {
           const input = body && body.integrations;
 
           if (!input || typeof input !== "object" || Array.isArray(input)) {
-            res.statusCode = 400;
-            res.setHeader("Content-Type", "application/json; charset=utf-8");
-            res.end(JSON.stringify({ error: "integrations 配置格式不正确" }));
+            sendJson(res, 400, { error: "integrations 配置格式不正确" });
             return;
           }
 
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify(clientConfig(writeIntegrationConfig(input))));
+          sendJson(res, 200, clientConfig(writeIntegrationConfig(input)));
         } catch (error) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify({ error: error && error.message ? error.message : "保存集成配置失败" }));
+          sendJson(res, 500, { error: error && error.message ? error.message : "保存集成配置失败" });
+        }
+      });
+
+      server.middlewares.use("/api/auth-file-detail", async function (req, res, next) {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        try {
+          const body = await readRequestBody(req);
+          const management = body && body.management;
+          const item = body && body.item;
+
+          if (!body || !management || typeof management !== "object" || Array.isArray(management) || !item || typeof item !== "object" || Array.isArray(item)) {
+            sendJson(res, 400, { error: "凭证信息请求格式不正确" });
+            return;
+          }
+          if (!String(management.baseUrl || "").trim() || !String(management.key || "").trim() || !String(item.name || "").trim()) {
+            sendJson(res, 400, { error: "缺少管理地址、Management Key 或文件名" });
+            return;
+          }
+
+          sendJson(res, 200, await readAuthFileDetail(body));
+        } catch (error) {
+          sendJson(res, 500, { error: error && error.message ? error.message : "读取凭证信息失败" });
+        }
+      });
+
+      // 开发模式默认只起 Vite，不起本地 Express，因此复活接口也要在这里补齐，避免页面在 5173 下直接打到 404。
+      server.middlewares.use("/api/revive-auth-file", async function (req, res, next) {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        try {
+          const body = await readRequestBody(req);
+          const management = body && body.management;
+          const item = body && body.item;
+
+          if (!body || !management || typeof management !== "object" || Array.isArray(management) || !item || typeof item !== "object" || Array.isArray(item)) {
+            sendJson(res, 400, { error: "复活请求格式不正确" });
+            return;
+          }
+          if (!String(management.baseUrl || "").trim() || !String(management.key || "").trim() || !String(item.name || "").trim()) {
+            sendJson(res, 400, { error: "缺少管理地址、Management Key 或文件名" });
+            return;
+          }
+
+          sendJson(res, 200, await reviveAuthFile(body));
+        } catch (error) {
+          sendJson(res, 500, { error: error && error.message ? error.message : "尝试复活失败" });
+        }
+      });
+
+      // 开发模式下的凭证保活与正式服务保持同一路径，避免 file/disabled 池里的批量刷新动作在 5173 下直接失效。
+      server.middlewares.use("/api/refresh-auth-file", async function (req, res, next) {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        try {
+          const body = await readRequestBody(req);
+          const management = body && body.management;
+          const item = body && body.item;
+
+          if (!body || !management || typeof management !== "object" || Array.isArray(management) || !item || typeof item !== "object" || Array.isArray(item)) {
+            sendJson(res, 400, { error: "凭证刷新请求格式不正确" });
+            return;
+          }
+          if (!String(management.baseUrl || "").trim() || !String(management.key || "").trim() || !String(item.name || "").trim()) {
+            sendJson(res, 400, { error: "缺少管理地址、Management Key 或文件名" });
+            return;
+          }
+
+          sendJson(res, 200, await refreshAuthCredential(body));
+        } catch (error) {
+          sendJson(res, 500, { error: error && error.message ? error.message : "刷新凭证失败" });
         }
       });
     }

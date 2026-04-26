@@ -1,4 +1,4 @@
-import { EMPTY_PLAN_TYPE_FILTER, FIVE_HOUR, POOL_SORT_MODES, WEEK } from "./constants.js";
+import { AUTH_TIMELINE_HINTS, EMPTY_PLAN_TYPE_FILTER, FIVE_HOUR, POOL_SORT_MODES, WEEK } from "./constants.js";
 
 export function now() {
   return new Date().toLocaleString("zh-CN", { hour12: false });
@@ -45,17 +45,39 @@ export function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function dateTimeValue(value) {
+  var parsed = parseDate(value);
+  return parsed ? parsed.getTime() : null;
+}
+
 export function fmt(value, full) {
   var date = parseDate(value);
+  var options = arguments[2] || {};
+
   if (!date) {
     return "未知";
   }
   return date.toLocaleString(
     "zh-CN",
-    full
-      ? { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
-      : { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
+    Object.assign(
+      {},
+      full
+        ? { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
+        : { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" },
+      options.withSeconds ? { second: "2-digit" } : {},
+      options.timeZone ? { timeZone: options.timeZone } : {}
+    )
   );
+}
+
+export function rawTimeText(value) {
+  if (value == null) {
+    return "未知";
+  }
+  if (typeof value === "string") {
+    return String(value).trim() || "未知";
+  }
+  return String(value);
 }
 
 export function parseBody(body) {
@@ -105,6 +127,8 @@ export function classify(limit) {
 
 function normalizeWindow(windowValue) {
   var seconds;
+  var rawUsed;
+  var rawLeft;
   var used;
   var left;
 
@@ -115,12 +139,16 @@ function normalizeWindow(windowValue) {
   seconds = toNum(
     windowValue.limit_window_seconds != null ? windowValue.limit_window_seconds : windowValue.limitWindowSeconds
   );
-  used = clamp(windowValue.used_percent != null ? windowValue.used_percent : windowValue.usedPercent);
-  left = used == null ? null : clamp(100 - used);
+  rawUsed = toNum(windowValue.used_percent != null ? windowValue.used_percent : windowValue.usedPercent);
+  rawLeft = rawUsed == null ? null : (100 - rawUsed);
+  used = clamp(rawUsed);
+  left = rawLeft == null ? null : clamp(rawLeft);
 
   return {
     label: seconds === WEEK ? "周窗口" : (seconds === FIVE_HOUR ? "5 小时窗口" : "主窗口"),
+    usedRaw: rawUsed,
     used: used,
+    leftRaw: rawLeft,
     left: left,
     resetAt: windowValue.reset_at != null ? windowValue.reset_at : (windowValue.resetAt != null ? windowValue.resetAt : null)
   };
@@ -146,20 +174,12 @@ export function selectSecondaryWindow(limit) {
 }
 
 function quotaEntryTitle(item, quota, fallback) {
-  var planType = String(item && item.planType ? item.planType : "").trim().toLowerCase();
-  var sessionWindowPlanTypes = ["plus", "team", "tream"];
-
-  // plus / team 账号的会话额度都按“5 小时 + 周”两层窗口展示，标题不再沿用通用的“会话”文案。
-  if (sessionWindowPlanTypes.indexOf(planType) !== -1) {
-    if (quota && quota.label === "5 小时窗口") {
-      return "5 小时";
-    }
-    if (quota && quota.label === "周窗口") {
-      return "周";
-    }
-    return fallback || (quota && quota.label) || "窗口";
+  if (quota && quota.label === "5 小时窗口") {
+    return "5 小时";
   }
-
+  if (quota && quota.label === "周窗口") {
+    return "周";
+  }
   return fallback;
 }
 
@@ -317,6 +337,111 @@ export function sessionResetTimeValue(item) {
   return Math.min.apply(Math, timestamps);
 }
 
+export function lastRefreshTimeValue(item) {
+  return dateTimeValue(item && item.lastRefresh ? item.lastRefresh : null);
+}
+
+export function expiredTimeValue(item) {
+  return dateTimeValue(item && item.expired ? item.expired : null);
+}
+
+function roundedDurationText(milliseconds) {
+  var abs = Math.abs(milliseconds);
+  var minute = 60 * 1000;
+  var hour = 60 * minute;
+  var day = 24 * hour;
+
+  if (abs < hour) {
+    return Math.max(1, Math.round(abs / minute)) + " 分钟";
+  }
+  if (abs < day) {
+    return Math.max(1, Math.round(abs / hour)) + " 小时";
+  }
+  return Math.max(1, Math.round(abs / day)) + " 天";
+}
+
+// last_refresh 是原始文件字段，这里只按它本身判断“新旧”，避免和前端同步时间混在一起。
+export function credentialRefreshMeta(item) {
+  var timestamp = lastRefreshTimeValue(item);
+  var age;
+
+  if (item && item.credentialInfoStatus && item.credentialInfoStatus !== "success" && timestamp == null) {
+    return {
+      tone: "neutral",
+      hintText: "未同步凭证信息"
+    };
+  }
+
+  if (timestamp == null) {
+    return {
+      tone: "neutral",
+      hintText: "未写入 last_refresh"
+    };
+  }
+
+  age = Date.now() - timestamp;
+  if (age <= AUTH_TIMELINE_HINTS.refreshFreshHours * 60 * 60 * 1000) {
+    return {
+      tone: "success",
+      hintText: "24 小时内刷新"
+    };
+  }
+  if (age <= AUTH_TIMELINE_HINTS.refreshWarnHours * 60 * 60 * 1000) {
+    return {
+      tone: "info",
+      hintText: "已过 " + roundedDurationText(age)
+    };
+  }
+  return {
+    tone: "warn",
+    hintText: "超过 " + roundedDurationText(age)
+  };
+}
+
+// expired 表示当前 access_token 的过期时间，和 refresh_token 是否还能换新不是一个概念。
+export function accessTokenExpiryMeta(item) {
+  var timestamp = expiredTimeValue(item);
+  var diff;
+
+  if (item && item.credentialInfoStatus && item.credentialInfoStatus !== "success" && timestamp == null) {
+    return {
+      tone: "neutral",
+      hintText: "未同步凭证信息"
+    };
+  }
+
+  if (timestamp == null) {
+    return {
+      tone: "neutral",
+      hintText: "未写入 expired"
+    };
+  }
+
+  diff = timestamp - Date.now();
+  if (diff <= 0) {
+    return {
+      tone: "danger",
+      hintText: "已过期 " + roundedDurationText(diff)
+    };
+  }
+  if (diff <= AUTH_TIMELINE_HINTS.expirySoonMinutes * 60 * 1000) {
+    return {
+      tone: "warn",
+      hintText: AUTH_TIMELINE_HINTS.expirySoonMinutes / 60 + " 小时内到期"
+    };
+  }
+  if (diff <= AUTH_TIMELINE_HINTS.expiryWarnHours * 60 * 60 * 1000) {
+    return {
+      tone: "info",
+      hintText: "24 小时内到期"
+    };
+  }
+  return {
+    tone: "success",
+    hintText: "剩余 " + roundedDurationText(diff)
+  };
+}
+
 function defaultItemComparator(a, b) {
   var toneWeight = { bad: 0, warn: 1, good: 2 };
   var aTone = toneWeight[a.tone] != null ? toneWeight[a.tone] : 99;
@@ -354,8 +479,57 @@ function sessionResetComparator(a, b) {
   return defaultItemComparator(a, b);
 }
 
-// 列表默认仍按风险和剩余额度优先；只有用户显式切到会话重置排序时，才把最早重置的账号提到前面。
+function lastRefreshComparator(a, b) {
+  var aRefresh = lastRefreshTimeValue(a);
+  var bRefresh = lastRefreshTimeValue(b);
+
+  if (aRefresh == null && bRefresh == null) {
+    return defaultItemComparator(a, b);
+  }
+  if (aRefresh == null) {
+    return 1;
+  }
+  if (bRefresh == null) {
+    return -1;
+  }
+  if (aRefresh !== bRefresh) {
+    return aRefresh - bRefresh;
+  }
+  return defaultItemComparator(a, b);
+}
+
+function expiredComparator(a, b) {
+  var aExpired = expiredTimeValue(a);
+  var bExpired = expiredTimeValue(b);
+
+  if (aExpired == null && bExpired == null) {
+    return defaultItemComparator(a, b);
+  }
+  if (aExpired == null) {
+    return 1;
+  }
+  if (bExpired == null) {
+    return -1;
+  }
+  if (aExpired !== bExpired) {
+    return aExpired - bExpired;
+  }
+  return defaultItemComparator(a, b);
+}
+
+// 排序入口统一收口在这里，方便各个池视图只管传模式，不再各自散落比较逻辑。
 export function sortItems(list, sortMode) {
   var mode = sortMode || POOL_SORT_MODES.DEFAULT;
-  return list.slice().sort(mode === POOL_SORT_MODES.SESSION_RESET_ASC ? sessionResetComparator : defaultItemComparator);
+  return list.slice().sort(function (a, b) {
+    if (mode === POOL_SORT_MODES.SESSION_RESET_ASC) {
+      return sessionResetComparator(a, b);
+    }
+    if (mode === POOL_SORT_MODES.LAST_REFRESH_ASC) {
+      return lastRefreshComparator(a, b);
+    }
+    if (mode === POOL_SORT_MODES.EXPIRED_ASC) {
+      return expiredComparator(a, b);
+    }
+    return defaultItemComparator(a, b);
+  });
 }

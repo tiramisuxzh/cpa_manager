@@ -1,15 +1,50 @@
 import { USAGE_URL } from "./constants.js";
 
+function stringifyApiDetail(value) {
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return String(value).trim();
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function extractApiMessage(value) {
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return String(value).trim();
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return String(value);
+  }
+
+  // 管理接口和本地代理的错误结构不完全一致，这里递归提取常见字段，避免 toast 只显示成 [object Object]。
+  return extractApiMessage(value.message)
+    || extractApiMessage(value.error)
+    || extractApiMessage(value.detail)
+    || extractApiMessage(value.type)
+    || stringifyApiDetail(value);
+}
+
 function parseResponse(response) {
   return response.text().then(function (text) {
     var data = {};
+    var errorMessage = "";
     try {
       data = text ? JSON.parse(text) : {};
     } catch (_) {
       data = { raw: text };
     }
     if (!response.ok) {
-      throw new Error(data.message || data.error || data.raw || ("HTTP " + response.status));
+      errorMessage = extractApiMessage(data) || stringifyApiDetail(data.raw) || ("HTTP " + response.status);
+      throw new Error(errorMessage);
     }
     return data;
   });
@@ -155,6 +190,83 @@ export function createApi(getSettings) {
     });
   }
 
+  // 本地代理接口和正式服务共用同一份 management 参数组装，避免后续新增 refresh/revive 类动作时再各自拼字段。
+  function authFileOperationPayload(settings, item) {
+    var target = item || {};
+
+    return {
+      management: {
+        baseUrl: settings.baseUrl,
+        key: settings.key,
+        reviveProxyUrl: settings.reviveProxyUrl || ""
+      },
+      item: {
+        name: target.name,
+        authIndex: target.authIndex || "",
+        accountId: target.accountId || "",
+        runtimeOnly: !!target.runtimeOnly,
+        source: target.source || ""
+      }
+    };
+  }
+
+  function reviveAuthFile(item) {
+    var settings;
+    var target = item || {};
+
+    try {
+      settings = withSettings();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (!target.name) {
+      return Promise.reject(new Error("缺少文件名，无法尝试复活。"));
+    }
+
+    return localRequest("/api/revive-auth-file", {
+      method: "POST",
+      body: authFileOperationPayload(settings, target)
+    });
+  }
+
+  function readAuthFileDetail(item) {
+    var settings;
+    var target = item || {};
+
+    try {
+      settings = withSettings();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (!target.name) {
+      return Promise.reject(new Error("缺少文件名，无法查看凭证信息。"));
+    }
+
+    return localRequest("/api/auth-file-detail", {
+      method: "POST",
+      body: authFileOperationPayload(settings, target)
+    });
+  }
+
+  function refreshAuthCredential(item) {
+    var settings;
+    var target = item || {};
+
+    try {
+      settings = withSettings();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (!target.name) {
+      return Promise.reject(new Error("缺少文件名，无法执行认证续期。"));
+    }
+
+    return localRequest("/api/refresh-auth-file", {
+      method: "POST",
+      body: authFileOperationPayload(settings, target)
+    });
+  }
+
   return {
     request: request,
     localRequest: localRequest,
@@ -169,6 +281,9 @@ export function createApi(getSettings) {
     deleteAuthFile: deleteAuthFile,
     setAuthFileDisabled: setAuthFileDisabled,
     saveDefaultManagementConfig: saveDefaultManagementConfig,
-    saveDefaultIntegrationConfig: saveDefaultIntegrationConfig
+    saveDefaultIntegrationConfig: saveDefaultIntegrationConfig,
+    readAuthFileDetail: readAuthFileDetail,
+    reviveAuthFile: reviveAuthFile,
+    refreshAuthCredential: refreshAuthCredential
   };
 }

@@ -1,8 +1,9 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
+import ActionIconButton from "./ActionIconButton.vue";
 import UsageInlineStats from "./UsageInlineStats.vue";
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, PENDING_GROUPS, POOL_SORT_MODES, POOL_SORT_OPTIONS } from "../lib/constants.js";
-import { buildPlanTypeOptions, fmt, planTypeFilterValue, quotaLeft as quotaLeftValue, quotaResetText, quotaText, sortItems } from "../lib/utils.js";
+import { accessTokenExpiryMeta, buildPlanTypeOptions, credentialRefreshMeta, fmt, planTypeFilterValue, quotaLeft as quotaLeftValue, quotaResetText, quotaText, sortItems } from "../lib/utils.js";
 
 var props = defineProps({
   consoleApp: {
@@ -10,6 +11,10 @@ var props = defineProps({
     required: true
   },
   onOpenDetail: {
+    type: Function,
+    required: true
+  },
+  onOpenCredential: {
     type: Function,
     required: true
   }
@@ -108,7 +113,7 @@ var filteredItems = computed(function () {
     return matchesSearch(item) && matchesCategory(item) && matchesRemain(item) && matchesPlanType(item);
   });
 
-  if (filters.sortMode === POOL_SORT_MODES.SESSION_RESET_ASC) {
+  if (filters.sortMode !== POOL_SORT_MODES.DEFAULT) {
     return sortItems(items, filters.sortMode);
   }
 
@@ -146,7 +151,9 @@ var selectionStats = computed(function () {
     total: selected.length,
     deletable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
     enableable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
-    refreshable: selected.filter(function (item) { return item.authIndex && item.accountId; }).length
+    refreshable: selected.filter(function (item) { return item.authIndex && item.accountId; }).length,
+    credentialInfoRefreshable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
+    credentialRefreshable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length
   };
 });
 
@@ -258,6 +265,22 @@ function syncStatusText(item) {
   return (item.requestStatusText || "已停用待处理") + " · 最近同步 " + syncTime;
 }
 
+function lastRefreshText(item) {
+  return item.lastRefresh ? fmt(item.lastRefresh, false) : (item.credentialInfoStatus === "success" ? "未写入" : "未同步");
+}
+
+function lastRefreshHint(item) {
+  return credentialRefreshMeta(item);
+}
+
+function expiredText(item) {
+  return item.expired ? fmt(item.expired, false) : (item.credentialInfoStatus === "success" ? "未写入" : "未同步");
+}
+
+function expiredHint(item) {
+  return accessTokenExpiryMeta(item);
+}
+
 function pageSizeText(size) {
   return size + " / 页";
 }
@@ -288,6 +311,12 @@ function warningRemainText() {
           <span>已选 {{ selectionStats.total }}</span>
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.refreshable" :aria-busy="props.consoleApp.isPending('refresh-selected-quotas') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedQuotas">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-selected-quotas') }">{{ pendingText('refresh-selected-quotas', '刷新选中额度', '刷新中') }}</span>
+          </button>
+          <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.credentialInfoRefreshable" :aria-busy="props.consoleApp.isPending('refresh-credential-info-selected') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedCredentialInfo">
+            <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-credential-info-selected') }">{{ pendingText('refresh-credential-info-selected', '同步选中凭证信息', '同步凭证中') }}</span>
+          </button>
+          <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.credentialRefreshable" :aria-busy="props.consoleApp.isPending('refresh-credentials-selected') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedCredentials">
+            <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-credentials-selected') }">{{ pendingText('refresh-credentials-selected', '批量认证续期', '续期中') }}</span>
           </button>
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.enableable" :aria-busy="props.consoleApp.isPending('enable-selected') ? 'true' : 'false'" @click="props.consoleApp.enableSelected">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('enable-selected') }">{{ pendingText('enable-selected', '启用选中', '启用中') }}</span>
@@ -363,6 +392,8 @@ function warningRemainText() {
         <span>文件 / 账号</span>
         <span>停用原因与建议</span>
         <span>额度与 Usage</span>
+        <span>凭证最近刷新</span>
+        <span>Access Token 过期</span>
         <span>额度重置 / 状态</span>
         <span class="align-right">操作</span>
       </header>
@@ -395,22 +426,62 @@ function warningRemainText() {
             <UsageInlineStats :success="item.usageSuccessCount" :failure="item.usageFailureCount" />
           </div>
 
+          <div class="row-cell auth-time-cell">
+            <strong>{{ lastRefreshText(item) }}</strong>
+            <span class="subtle-hint" :class="'tone-' + lastRefreshHint(item).tone" title="原始字段：last_refresh">{{ lastRefreshHint(item).hintText }}</span>
+          </div>
+
+          <div class="row-cell auth-time-cell">
+            <strong>{{ expiredText(item) }}</strong>
+            <span class="subtle-hint" :class="'tone-' + expiredHint(item).tone" title="原始字段：expired（当前 access_token 过期时间）">{{ expiredHint(item).hintText }}</span>
+          </div>
+
           <div class="row-cell time-cell">
             <strong>{{ quotaResetText(item, false) }}</strong>
             <span>{{ syncStatusText(item) }}</span>
           </div>
 
           <div class="row-cell action-cell">
-            <button class="mini-btn" type="button" @click="props.onOpenDetail(item)">详情</button>
-            <button class="mini-btn" type="button" :disabled="workbenchPending() || rowPending(item) || !item.authIndex || !item.accountId" :aria-busy="props.consoleApp.isPending('row-refresh', item.key) ? 'true' : 'false'" @click="props.consoleApp.refreshOne(item.key)">
-              <span class="button-label" :class="{ pending: props.consoleApp.isPending('row-refresh', item.key) }">{{ pendingText('row-refresh', '刷新', '刷新中', item.key) }}</span>
-            </button>
-            <button class="mini-btn" type="button" :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly" :aria-busy="props.consoleApp.isPending('row-toggle-disabled', item.key) ? 'true' : 'false'" @click="props.consoleApp.setFileDisabled(item, false)">
-              <span class="button-label" :class="{ pending: props.consoleApp.isPending('row-toggle-disabled', item.key) }">{{ pendingText('row-toggle-disabled', '启用', '启用中', item.key) }}</span>
-            </button>
-            <button class="mini-btn danger" type="button" :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly" :aria-busy="props.consoleApp.isPending('row-delete', item.key) ? 'true' : 'false'" @click="props.consoleApp.deleteFile(item)">
-              <span class="button-label" :class="{ pending: props.consoleApp.isPending('row-delete', item.key) }">{{ pendingText('row-delete', '删除', '删除中', item.key) }}</span>
-            </button>
+            <ActionIconButton title="查看详情" icon="detail" @click="props.onOpenDetail(item)" />
+            <ActionIconButton
+              title="同步凭证信息"
+              icon="credential-info"
+              tone="accent"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-credential-info', item.key)"
+              @click="props.onOpenCredential(item)"
+            />
+            <ActionIconButton
+              title="认证续期"
+              icon="credential-refresh"
+              tone="accent"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-refresh-credential', item.key)"
+              @click="props.consoleApp.refreshCredentialOne(item.key)"
+            />
+            <ActionIconButton
+              title="刷新额度"
+              icon="refresh"
+              :disabled="workbenchPending() || rowPending(item) || !item.authIndex || !item.accountId"
+              :pending="props.consoleApp.isPending('row-refresh', item.key)"
+              @click="props.consoleApp.refreshOne(item.key)"
+            />
+            <ActionIconButton
+              title="启用文件"
+              icon="enable"
+              tone="warn"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-toggle-disabled', item.key)"
+              @click="props.consoleApp.setFileDisabled(item, false)"
+            />
+            <ActionIconButton
+              title="删除文件"
+              icon="delete"
+              tone="danger"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-delete', item.key)"
+              @click="props.consoleApp.deleteFile(item)"
+            />
           </div>
         </article>
       </div>
@@ -514,20 +585,24 @@ function warningRemainText() {
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
+  overflow: auto;
 }
 
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 40px minmax(220px, 1.2fr) minmax(260px, 1.4fr) minmax(220px, 1fr) minmax(180px, 0.8fr) minmax(240px, 0.9fr);
+  grid-template-columns: 40px minmax(200px, 1.1fr) minmax(220px, 1.2fr) minmax(160px, 0.86fr) minmax(132px, 0.68fr) minmax(132px, 0.68fr) minmax(160px, 0.78fr) minmax(176px, 0.78fr);
   gap: 12px;
   align-items: center;
 }
 
 .table-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 4px 0 10px;
   border-bottom: 1px solid var(--line-soft);
+  background: var(--panel);
   color: var(--text-muted);
   font-size: 12px;
   letter-spacing: 0.06em;
@@ -546,7 +621,7 @@ function warningRemainText() {
 
 .table-body {
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   display: grid;
   gap: 6px;
   padding-top: 8px;
@@ -598,8 +673,7 @@ function warningRemainText() {
 }
 
 .tag-row,
-.status-line,
-.action-cell {
+.status-line {
   display: flex;
   gap: 6px;
   align-items: center;
@@ -636,7 +710,48 @@ function warningRemainText() {
 }
 
 .action-cell {
+  display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.auth-time-cell strong,
+.time-cell strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.subtle-hint {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: rgba(113, 128, 154, 0.08);
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.subtle-hint.tone-success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.subtle-hint.tone-info {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.subtle-hint.tone-warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.subtle-hint.tone-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .table-empty {
@@ -665,7 +780,7 @@ function warningRemainText() {
 
   .table-head,
   .table-row {
-    grid-template-columns: 40px minmax(180px, 1fr) minmax(220px, 1.2fr) minmax(180px, 0.9fr) minmax(150px, 0.8fr) minmax(220px, 0.9fr);
+    grid-template-columns: 40px minmax(176px, 1fr) minmax(196px, 1.06fr) minmax(148px, 0.8fr) minmax(124px, 0.66fr) minmax(124px, 0.66fr) minmax(144px, 0.74fr) minmax(172px, 0.8fr);
   }
 }
 
@@ -692,7 +807,8 @@ function warningRemainText() {
 
   .row-check,
   .action-cell {
-    justify-content: flex-start;
+    justify-content: start;
+    justify-items: start;
   }
 
   .control-bar {
