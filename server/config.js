@@ -6,13 +6,18 @@ const AUTO_REFRESH_MODE_FILES = "files";
 const AUTO_REFRESH_MODE_FILES_AND_QUOTAS = "files-and-quotas";
 const TOKEN_REFRESH_CONCURRENCY_DEFAULT = 3;
 const TOKEN_REFRESH_INTERVAL_SECONDS_DEFAULT = 0;
+const TOKEN_REFRESH_SCOPE_ALL = "all";
 const DEFAULT_CONFIG = {
   management: {
     baseUrl: "",
     key: "",
     reviveProxyUrl: "",
+    syncTargetBaseUrl: "",
+    syncTargetKey: "",
+    syncSkipExisting: true,
     tokenRefreshConcurrency: TOKEN_REFRESH_CONCURRENCY_DEFAULT,
     tokenRefreshIntervalSeconds: TOKEN_REFRESH_INTERVAL_SECONDS_DEFAULT,
+    tokenRefreshScope: TOKEN_REFRESH_SCOPE_ALL,
     interval: 10,
     showFilename: false,
     autoRefresh: false,

@@ -44,7 +44,11 @@ function parseResponse(response) {
     }
     if (!response.ok) {
       errorMessage = extractApiMessage(data) || stringifyApiDetail(data.raw) || ("HTTP " + response.status);
-      throw new Error(errorMessage);
+      // 这里保留 HTTP 状态码，方便上层把“接口不存在/版本不支持”和普通业务失败区分开。
+      var error = new Error(errorMessage);
+      error.status = response.status;
+      error.payload = data;
+      throw error;
     }
     return data;
   });
@@ -210,6 +214,24 @@ export function createApi(getSettings) {
     };
   }
 
+  function authFileSyncPayload(settings, options) {
+    var currentOptions = options || {};
+
+    return {
+      sourceManagement: {
+        baseUrl: settings.baseUrl,
+        key: settings.key
+      },
+      targetManagement: {
+        baseUrl: settings.syncTargetBaseUrl,
+        key: settings.syncTargetKey
+      },
+      options: {
+        skipExisting: currentOptions.skipExisting !== false
+      }
+    };
+  }
+
   function reviveAuthFile(item) {
     var settings;
     var target = item || {};
@@ -248,6 +270,25 @@ export function createApi(getSettings) {
     });
   }
 
+  function exportAuthFile(item) {
+    var settings;
+    var target = item || {};
+
+    try {
+      settings = withSettings();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (!target.name) {
+      return Promise.reject(new Error("缺少文件名，无法导出原始文件。"));
+    }
+
+    return localRequest("/api/export-auth-file", {
+      method: "POST",
+      body: authFileOperationPayload(settings, target)
+    });
+  }
+
   function refreshAuthCredential(item) {
     var settings;
     var target = item || {};
@@ -267,6 +308,70 @@ export function createApi(getSettings) {
     });
   }
 
+  function syncAuthFiles(options) {
+    var settings;
+
+    try {
+      settings = withSettings();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (!String(settings.syncTargetBaseUrl || "").trim() || !String(settings.syncTargetKey || "").trim()) {
+      return Promise.reject(new Error("缺少目标管理地址或目标 Management Key。"));
+    }
+
+    return localRequest("/api/sync-auth-files", {
+      method: "POST",
+      body: authFileSyncPayload(settings, options)
+    });
+  }
+
+  function startOAuthAuth(provider, options) {
+    var normalizedProvider = String(provider || "").trim();
+    var isWebUi = !options || options.isWebUi !== false;
+    var query = "is_webui=" + (isWebUi ? "true" : "false");
+    var projectId = options && options.projectId != null ? String(options.projectId).trim() : "";
+
+    if (!normalizedProvider) {
+      return Promise.reject(new Error("缺少 OAuth provider。"));
+    }
+    if (projectId) {
+      query += "&project_id=" + encodeURIComponent(projectId);
+    }
+
+    return request("/" + normalizedProvider + "-auth-url?" + query);
+  }
+
+  function getOAuthAuthStatus(state) {
+    var normalizedState = String(state || "").trim();
+
+    if (!normalizedState) {
+      return Promise.reject(new Error("缺少 OAuth state。"));
+    }
+
+    return request("/get-auth-status?state=" + encodeURIComponent(normalizedState));
+  }
+
+  function submitOAuthCallback(provider, redirectUrl) {
+    var normalizedProvider = String(provider || "").trim();
+    var normalizedRedirectUrl = String(redirectUrl || "").trim();
+
+    if (!normalizedProvider) {
+      return Promise.reject(new Error("缺少 OAuth provider。"));
+    }
+    if (!normalizedRedirectUrl) {
+      return Promise.reject(new Error("缺少回调地址。"));
+    }
+
+    return request("/oauth-callback", {
+      method: "POST",
+      body: {
+        provider: normalizedProvider === "gemini-cli" ? "gemini" : normalizedProvider,
+        redirect_url: normalizedRedirectUrl
+      }
+    });
+  }
+
   return {
     request: request,
     localRequest: localRequest,
@@ -283,7 +388,12 @@ export function createApi(getSettings) {
     saveDefaultManagementConfig: saveDefaultManagementConfig,
     saveDefaultIntegrationConfig: saveDefaultIntegrationConfig,
     readAuthFileDetail: readAuthFileDetail,
+    exportAuthFile: exportAuthFile,
     reviveAuthFile: reviveAuthFile,
-    refreshAuthCredential: refreshAuthCredential
+    refreshAuthCredential: refreshAuthCredential,
+    syncAuthFiles: syncAuthFiles,
+    startOAuthAuth: startOAuthAuth,
+    getOAuthAuthStatus: getOAuthAuthStatus,
+    submitOAuthCallback: submitOAuthCallback
   };
 }

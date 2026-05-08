@@ -5,7 +5,8 @@ import {
   STORE,
   TOKEN_REFRESH_DEFAULTS,
   TOKEN_REFRESH_LIMITS,
-  normalizeAutoRefreshMode
+  normalizeAutoRefreshMode,
+  normalizeTokenRefreshScope
 } from "../lib/constants.js";
 
 function normalizedConfig(config) {
@@ -73,16 +74,21 @@ export function readSettings(config) {
   var quotaRequestIntervalSeconds = parseFloat(raw.quotaRequestIntervalSeconds != null ? raw.quotaRequestIntervalSeconds : defaults.quotaRequestIntervalSeconds);
   var tokenRefreshConcurrency = parseInt(raw.tokenRefreshConcurrency != null ? raw.tokenRefreshConcurrency : defaults.tokenRefreshConcurrency, 10);
   var tokenRefreshIntervalSeconds = parseFloat(raw.tokenRefreshIntervalSeconds != null ? raw.tokenRefreshIntervalSeconds : defaults.tokenRefreshIntervalSeconds);
+  var tokenRefreshScope = raw.tokenRefreshScope != null ? raw.tokenRefreshScope : defaults.tokenRefreshScope;
   var autoRefreshMode = raw.autoRefreshMode != null ? raw.autoRefreshMode : defaults.autoRefreshMode;
 
   return {
     baseUrl: raw.baseUrl || defaults.baseUrl || "http://127.0.0.1:8317",
     key: defaults.key || "",
     reviveProxyUrl: String(raw.reviveProxyUrl != null ? raw.reviveProxyUrl : defaults.reviveProxyUrl || "").trim(),
+    syncTargetBaseUrl: String(raw.syncTargetBaseUrl != null ? raw.syncTargetBaseUrl : defaults.syncTargetBaseUrl || "").trim(),
+    syncTargetKey: String(defaults.syncTargetKey || "").trim(),
+    syncSkipExisting: raw.syncSkipExisting != null ? !!raw.syncSkipExisting : defaults.syncSkipExisting !== false,
     interval: Math.max(1, parseInt(raw.interval != null ? raw.interval : defaults.interval, 10) || 10),
     showFilename: raw.showFilename != null ? !!raw.showFilename : !!defaults.showFilename,
     autoRefresh: raw.autoRefresh != null ? !!raw.autoRefresh : !!defaults.autoRefresh,
     autoRefreshMode: normalizeAutoRefreshMode(autoRefreshMode || AUTO_REFRESH_MODES.FILES),
+    tokenRefreshScope: normalizeTokenRefreshScope(tokenRefreshScope),
     lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
     quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
     quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds)),
@@ -101,10 +107,13 @@ export function writeSettings(settings) {
     localStorage.setItem(STORE, JSON.stringify({
       baseUrl: String(settings.baseUrl || "").trim().replace(/\/+$/, ""),
       reviveProxyUrl: String(settings.reviveProxyUrl || "").trim(),
+      syncTargetBaseUrl: String(settings.syncTargetBaseUrl || "").trim().replace(/\/+$/, ""),
+      syncSkipExisting: settings.syncSkipExisting !== false,
       interval: Math.max(1, parseInt(settings.interval, 10) || 10),
       showFilename: !!settings.showFilename,
       autoRefresh: !!settings.autoRefresh,
       autoRefreshMode: normalizeAutoRefreshMode(settings.autoRefreshMode || AUTO_REFRESH_MODES.FILES),
+      tokenRefreshScope: normalizeTokenRefreshScope(settings.tokenRefreshScope),
       lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
       quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
       quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds)),

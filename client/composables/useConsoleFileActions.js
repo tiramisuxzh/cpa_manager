@@ -1,8 +1,11 @@
 import { enrichError, enrichItem } from "../lib/auth-file-state.js";
+import { TOKEN_REFRESH_SCOPE_OPTIONS, TOKEN_REFRESH_SCOPES, normalizeTokenRefreshScope } from "../lib/constants.js";
+import { expiredTimeValue } from "../lib/utils.js";
 
 // 文件级动作统一放在这里，主 composable 只保留数据流和派生状态。
 export function useConsoleFileActions(context) {
   var api = context.api;
+  var settings = context.settings;
   var state = context.state;
   var uploadInputRef = context.uploadInputRef;
   var currentClassifierOptions = context.currentClassifierOptions;
@@ -88,6 +91,63 @@ export function useConsoleFileActions(context) {
     return targetFileItems(list, { allowDisabled: true });
   }
 
+  function currentTokenRefreshScope() {
+    return normalizeTokenRefreshScope(settings && settings.tokenRefreshScope);
+  }
+
+  function currentTokenRefreshScopeOption() {
+    var scope = currentTokenRefreshScope();
+
+    return TOKEN_REFRESH_SCOPE_OPTIONS.filter(function (option) {
+      return option.value === scope;
+    })[0] || TOKEN_REFRESH_SCOPE_OPTIONS[0];
+  }
+
+  function tokenRefreshScopeThreshold(scope) {
+    if (scope === TOKEN_REFRESH_SCOPES.WITHIN_1_DAY) {
+      return 24 * 60 * 60 * 1000;
+    }
+    if (scope === TOKEN_REFRESH_SCOPES.WITHIN_3_DAYS) {
+      return 3 * 24 * 60 * 60 * 1000;
+    }
+    if (scope === TOKEN_REFRESH_SCOPES.WITHIN_7_DAYS) {
+      return 7 * 24 * 60 * 60 * 1000;
+    }
+    if (scope === TOKEN_REFRESH_SCOPES.WITHIN_30_DAYS) {
+      return 30 * 24 * 60 * 60 * 1000;
+    }
+    return null;
+  }
+
+  function matchesTokenRefreshScope(item, scopeValue) {
+    var scope = normalizeTokenRefreshScope(scopeValue);
+    var expiredAt = expiredTimeValue(item);
+    var nowTime = Date.now();
+    var threshold;
+
+    if (scope === TOKEN_REFRESH_SCOPES.ALL) {
+      return true;
+    }
+    if (scope === TOKEN_REFRESH_SCOPES.EXPIRED_OR_MISSING) {
+      return expiredAt == null || expiredAt <= nowTime;
+    }
+    if (expiredAt == null) {
+      return false;
+    }
+
+    threshold = tokenRefreshScopeThreshold(scope);
+    if (threshold == null) {
+      return true;
+    }
+    return (expiredAt - nowTime) <= threshold;
+  }
+
+  function credentialRefreshableItemsByScope(list, scopeValue) {
+    return credentialRefreshableItems(list).filter(function (item) {
+      return matchesTokenRefreshScope(item, scopeValue);
+    });
+  }
+
   // 批量确认统一输出结构化内容，避免文件一多时把确认弹窗直接撑爆。
   function buildConfirmOptions(list, options, fallback) {
     var currentOptions = options || {};
@@ -111,6 +171,31 @@ export function useConsoleFileActions(context) {
     return new Promise(function (resolve) {
       setTimeout(resolve, Math.max(0, Number(value) || 0));
     });
+  }
+
+  function exportedFileName(name) {
+    var normalized = String(name || "").trim();
+
+    if (!normalized) {
+      return "auth-file.json";
+    }
+    return /\.json$/i.test(normalized) ? normalized : (normalized + ".json");
+  }
+
+  function triggerBrowserDownload(fileName, contentText) {
+    var blob = new Blob([contentText], { type: "application/json;charset=utf-8" });
+    var objectUrl = URL.createObjectURL(blob);
+    var anchor = document.createElement("a");
+
+    anchor.href = objectUrl;
+    anchor.download = exportedFileName(fileName);
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    setTimeout(function () {
+      URL.revokeObjectURL(objectUrl);
+    }, 1000);
   }
 
   function stringifyActionDetail(value) {
@@ -224,6 +309,165 @@ export function useConsoleFileActions(context) {
     });
 
     return target.slice();
+  }
+
+  async function exportItemFile(item, options) {
+    var currentOptions = options || {};
+    var result;
+    var message;
+
+    if (!item || !item.name) {
+      if (!currentOptions.silentToast) {
+        notify("缺少文件名，无法导出原始文件。", "info");
+      }
+      return null;
+    }
+    if (item.runtimeOnly) {
+      if (!currentOptions.silentToast) {
+        notify("运行时账号不支持导出原始文件。", "info");
+      }
+      return null;
+    }
+
+    if (currentOptions.pendingType) {
+      startPending(currentOptions.pendingType, currentOptions.pendingKey || item.key);
+    }
+
+    try {
+      result = await api.exportAuthFile(item);
+      if (!result || result.success !== true || !result.contentText) {
+        message = actionMessageText(result && result.message, "导出文件失败");
+        if (!currentOptions.silentLog) {
+          log("导出文件失败：" + item.name + " · " + message, true);
+        }
+        if (!currentOptions.silentToast) {
+          notify("导出文件失败：" + item.name + "\n" + message, "danger", 4200);
+        }
+        return Object.assign({}, result || {}, {
+          success: false,
+          message: message
+        });
+      }
+
+      triggerBrowserDownload(result.fileName || item.name, result.contentText);
+      if (!currentOptions.silentLog) {
+        log("导出文件成功：" + item.name);
+      }
+      if (!currentOptions.silentToast) {
+        notify("导出文件成功：" + item.name, "success");
+      }
+      return result;
+    } catch (error) {
+      message = error && error.message ? error.message : "导出文件失败";
+      if (!currentOptions.silentLog) {
+        log("导出文件失败：" + item.name + " · " + message, true);
+      }
+      if (!currentOptions.silentToast) {
+        notify("导出文件失败：" + item.name + "\n" + message, "danger", 4200);
+      }
+      return {
+        success: false,
+        reason: "export_auth_file_request_failed",
+        message: message
+      };
+    } finally {
+      if (currentOptions.pendingType) {
+        finishPending(currentOptions.pendingType, currentOptions.pendingKey || item.key);
+      }
+    }
+  }
+
+  async function exportItems(list, options) {
+    var currentOptions = options || {};
+    var targetList = targetFileItems(list, { allowDisabled: true });
+    var pendingType = currentOptions.pendingType || "export-selected";
+    var pendingKey = currentOptions.pendingKey || "";
+    var progressId = resolveProgressTaskId(currentOptions, pendingType, pendingKey);
+    var index;
+    var successCount = 0;
+    var failureCount = 0;
+    var failureDetails = [];
+
+    if (!targetList.length) {
+      log(currentOptions.emptyLog || "当前没有可导出的文件。");
+      notify(currentOptions.emptyToast || "当前没有可导出的文件。", "info");
+      return null;
+    }
+
+    if (!await askConfirm(buildConfirmOptions(targetList, currentOptions, {
+      title: currentOptions.confirmTitle || "确认导出文件",
+      message: "将导出 " + targetList.length + " 个原始认证 JSON 文件。",
+      listTitle: currentOptions.confirmListTitle || "本次导出文件",
+      note: currentOptions.confirmNote || "浏览器会依次下载文件，数量较多时请留意下载栏或系统保存目录。",
+      confirmText: currentOptions.confirmText || "确认导出",
+      tone: currentOptions.tone || "success"
+    }))) {
+      log(currentOptions.cancelLog || "用户取消了导出文件。");
+      notify(currentOptions.cancelToast || "已取消导出文件。", "info");
+      return null;
+    }
+
+    startPending(pendingType, pendingKey);
+    setBusy(true);
+    setTaskProgress(progressId, currentOptions.progressLabel || "正在准备导出文件…", 8, {
+      done: 0,
+      total: targetList.length
+    });
+
+    try {
+      log(currentOptions.startLog || ("开始导出文件，共 " + targetList.length + " 个。"));
+      for (index = 0; index < targetList.length; index += 1) {
+        var item = targetList[index];
+        var result;
+        var message;
+
+        setTaskProgress(progressId, (currentOptions.sequenceLabel || "正在导出文件") + "… " + (index + 1) + "/" + targetList.length + " · " + item.name, computeProgressPercent(index + 1, targetList.length), {
+          done: index + 1,
+          total: targetList.length
+        });
+        result = await exportItemFile(item, {
+          silentLog: true,
+          silentToast: true
+        });
+        if (result && result.success === true) {
+          successCount += 1;
+        } else {
+          failureCount += 1;
+          message = actionMessageText(result && result.message, "导出文件失败");
+          failureDetails = appendFailureDetail(failureDetails, item, message);
+        }
+
+        // 浏览器批量保存时给一个很短的间隔，减少连续触发下载带来的竞争。
+        if (index < targetList.length - 1) {
+          await waitMilliseconds(80);
+        }
+      }
+
+      failureDetails.forEach(function (item) {
+        log("导出文件失败：" + item.name + " · " + item.message, true);
+      });
+      log((currentOptions.completeLogPrefix || "导出完成") + "：成功 " + successCount + " 个，失败 " + failureCount + " 个。");
+      notify((currentOptions.completeToastPrefix || "导出完成") + "：成功 " + successCount + " 个，失败 " + failureCount + " 个。", failureCount ? "warn" : "success", 4200);
+      completeTaskProgress(progressId, currentOptions.completeText || "导出文件完成。", {
+        tone: failureCount ? "warn" : "success",
+        done: targetList.length,
+        total: targetList.length,
+        hideDelayMs: failureCount ? 2200 : 1400
+      });
+      return {
+        ok: successCount,
+        fail: failureCount
+      };
+    } catch (error) {
+      completeTaskProgress(progressId, "导出文件失败。", {
+        tone: "danger",
+        hideDelayMs: 2400
+      });
+      throw error;
+    } finally {
+      setBusy(false);
+      finishPending(pendingType, pendingKey);
+    }
   }
 
   // 认证续期只依赖文件名和 refresh_token，本身不额外做额度接口校验。
@@ -1006,9 +1250,81 @@ export function useConsoleFileActions(context) {
     var selectedList = state.items.filter(function (item) {
       return state.selected[item.key];
     });
-    var targetList = credentialRefreshableItems(selectedList);
+
+    // 选中续期只负责把当前勾选范围交给公共批量续期入口，避免并发、弹窗和失败明细逻辑在多个入口各维护一份。
+    return refreshCredentialsBatch(selectedList, {
+      emptyLog: "当前没有可批量执行认证续期的文件。",
+      emptyToast: "当前没有可批量执行认证续期的文件。",
+      confirmTitle: "确认批量认证续期",
+      confirmMessage: "将使用选中文件中的 refresh_token 主动执行 OAuth 认证续期，并把新 token 覆盖回原始文件。",
+      confirmListTitle: "本次批量认证续期文件",
+      confirmNote: "该操作专注于 refresh_token 轮换与回写，不会额外做额度校验。并发数和间隔可在系统设置里调整。",
+      confirmText: "确认续期",
+      cancelLog: "用户取消了批量认证续期。",
+      cancelToast: "已取消批量认证续期。",
+      pendingType: "refresh-credentials-selected",
+      progressTaskKey: "batch",
+      dialogTitle: "批量认证续期",
+      prepareStage: "正在准备批量认证续期…",
+      runningStage: "正在批量认证续期…",
+      startingMessage: "任务启动后会按配置并发刷新 refresh_token，并在结束后统一同步文件状态。",
+      startLog: "开始批量认证续期",
+      progressLabel: "正在准备批量认证续期…",
+      runningProgressLabel: "正在批量认证续期…",
+      reloadProgressText: "批量认证续期完成，正在同步文件状态…",
+      successStage: "批量认证续期已全部完成。",
+      partialStage: "批量认证续期已完成，部分文件续期失败。",
+      completedMessagePrefix: "批量认证续期完成",
+      interruptedStage: "批量认证续期中断，请查看底部动态日志。",
+      interruptedMessage: "批量认证续期中断",
+      completionText: "批量认证续期完成。",
+      interruptionText: "批量认证续期中断。",
+      clearSelectionAfter: true
+    });
+  }
+
+  async function refreshAllCredentials() {
+    var scopeOption = currentTokenRefreshScopeOption();
+    var targetList = credentialRefreshableItemsByScope(state.items, scopeOption.value);
+
+    // “立即续期全部文件”明确只作用于当前已加载到管理台里的文件，并且再按当前 access_token 过期范围做一次筛选。
+    return refreshCredentialsBatch(targetList, {
+      emptyLog: "当前没有命中“" + scopeOption.label + "”范围的文件，请先同步凭证信息或调整续期范围。",
+      emptyToast: "当前没有命中“" + scopeOption.label + "”范围的文件。",
+      confirmTitle: "确认立即续期全部文件",
+      confirmMessage: "将对当前已加载且命中“" + scopeOption.label + "”范围的文件执行认证续期，使用各自的 refresh_token 主动获取新的 token，并回写原始文件。",
+      confirmListTitle: "本次立即续期文件",
+      confirmNote: "筛选范围根据原始字段 expired 判断：已过期文件会被纳入所有“X 天内到期”范围；未写入 expired 的文件只会命中“已过期 / 未写入”。该操作不自动重拉新的文件列表。",
+      confirmText: "确认全部续期",
+      cancelLog: "用户取消了立即续期全部文件。",
+      cancelToast: "已取消立即续期全部文件。",
+      pendingType: "refresh-all-credentials",
+      progressTaskKey: "all",
+      dialogTitle: "立即续期全部文件",
+      prepareStage: "正在准备全文件认证续期…",
+      runningStage: "正在执行全文件认证续期…",
+      startingMessage: "任务启动后会按配置并发刷新全部已加载文件的 refresh_token，并在结束后统一同步文件状态。",
+      startLog: "开始立即续期全部文件",
+      progressLabel: "正在准备全文件认证续期…",
+      runningProgressLabel: "正在执行全文件认证续期…",
+      reloadProgressText: "全文件认证续期完成，正在同步文件状态…",
+      successStage: "全文件认证续期已全部完成。",
+      partialStage: "全文件认证续期已完成，部分文件续期失败。",
+      completedMessagePrefix: "全文件认证续期完成",
+      interruptedStage: "全文件认证续期中断，请查看底部动态日志。",
+      interruptedMessage: "全文件认证续期中断",
+      completionText: "全文件认证续期完成。",
+      interruptionText: "全文件认证续期中断。",
+      clearSelectionAfter: false
+    });
+  }
+
+  async function refreshCredentialsBatch(list, options) {
+    var currentOptions = options || {};
+    var targetList = credentialRefreshableItems(list);
     var refreshOptions = currentTokenRefreshOptions();
-    var progressId = progressTaskId("refresh-credentials-selected", "batch");
+    var pendingType = currentOptions.pendingType || "refresh-credentials-selected";
+    var progressId = progressTaskId(pendingType, currentOptions.progressTaskKey || "batch");
     var activeMap = {};
     var total;
     var done = 0;
@@ -1019,35 +1335,36 @@ export function useConsoleFileActions(context) {
     var failureDetails = [];
     var resultDetails = [];
     var selectionCleared = false;
+    var clearSelectionAfter = currentOptions.clearSelectionAfter !== false;
 
     if (!targetList.length) {
-      log("当前没有可批量执行认证续期的文件。");
-      notify("当前没有可批量执行认证续期的文件。", "info");
+      log(currentOptions.emptyLog || "当前没有可批量执行认证续期的文件。");
+      notify(currentOptions.emptyToast || "当前没有可批量执行认证续期的文件。", "info");
       return null;
     }
 
     if (!await askConfirm({
-      title: "确认批量认证续期",
-      message: "将使用选中文件中的 refresh_token 主动执行 OAuth 认证续期，并把新 token 覆盖回原始文件。",
+      title: currentOptions.confirmTitle || "确认批量认证续期",
+      message: currentOptions.confirmMessage || "将使用选中文件中的 refresh_token 主动执行 OAuth 认证续期，并把新 token 覆盖回原始文件。",
       items: targetList.map(function (item) { return item.name; }),
-      listTitle: "本次批量认证续期文件",
-      note: "该操作专注于 refresh_token 轮换与回写，不会额外做额度校验。并发数和间隔可在系统设置里调整。",
-      confirmText: "确认续期",
+      listTitle: currentOptions.confirmListTitle || "本次批量认证续期文件",
+      note: currentOptions.confirmNote || "该操作专注于 refresh_token 轮换与回写，不会额外做额度校验。并发数和间隔可在系统设置里调整。",
+      confirmText: currentOptions.confirmText || "确认续期",
       cancelText: "取消",
       tone: "warn"
     })) {
-      log("用户取消了批量认证续期。");
-      notify("已取消批量认证续期。", "info");
+      log(currentOptions.cancelLog || "用户取消了批量认证续期。");
+      notify(currentOptions.cancelToast || "已取消批量认证续期。", "info");
       return null;
     }
 
     total = targetList.length;
-    startPending("refresh-credentials-selected");
+    startPending(pendingType);
     setBusy(true);
     closeOperationDialog(true);
     showOperationDialog({
-      title: "批量认证续期",
-      stage: "正在准备批量认证续期…",
+      title: currentOptions.dialogTitle || "批量认证续期",
+      stage: currentOptions.prepareStage || "正在准备批量认证续期…",
       currentName: targetList[0] ? targetList[0].name : "",
       activeNames: [],
       currentIndex: 0,
@@ -1059,18 +1376,18 @@ export function useConsoleFileActions(context) {
       failureLabel: "认证续期失败",
       concurrency: refreshOptions.concurrency,
       intervalSeconds: refreshOptions.intervalSeconds,
-      latestMessage: "任务启动后会按配置并发刷新 refresh_token，并在结束后统一同步文件状态。",
+      latestMessage: currentOptions.startingMessage || "任务启动后会按配置并发刷新 refresh_token，并在结束后统一同步文件状态。",
       failureDetails: [],
       resultDetails: [],
       canClose: false,
       completed: false
     });
-    setTaskProgress(progressId, "正在准备批量认证续期…", 8, {
+    setTaskProgress(progressId, currentOptions.progressLabel || "正在准备批量认证续期…", 8, {
       done: 0,
       total: total
     });
 
-    // 这里沿用额度刷新同款 worker 池语义：固定并发槽循环取任务，每个并发槽完成一次后再按配置等待间隔。
+    // 这里统一复用认证续期 worker 池，支持“选中续期”和“全部续期”两类入口共享同一套并发、日志和失败明细逻辑。
     async function worker() {
       var item;
       var currentItem;
@@ -1087,7 +1404,7 @@ export function useConsoleFileActions(context) {
       activeMap[currentItem.key] = currentItem.name;
       latestMessage = "已启动认证续期：" + currentItem.name;
       updateOperationDialog({
-        stage: "正在批量认证续期…",
+        stage: currentOptions.runningStage || "正在批量认证续期…",
         currentName: currentItem.name,
         activeNames: activeDialogNames(activeMap),
         currentIndex: done,
@@ -1099,7 +1416,7 @@ export function useConsoleFileActions(context) {
         canClose: false,
         completed: false
       });
-      setTaskProgress(progressId, "正在批量认证续期… 已完成 " + done + "/" + total + " · 当前 " + currentItem.name, computeProgressPercent(done, total), {
+      setTaskProgress(progressId, (currentOptions.runningProgressLabel || "正在批量认证续期…") + " 已完成 " + done + "/" + total + " · 当前 " + currentItem.name, computeProgressPercent(done, total), {
         done: done,
         total: total
       });
@@ -1144,15 +1461,17 @@ export function useConsoleFileActions(context) {
     }
 
     try {
-      log("开始批量认证续期，共 " + total + " 个，并发 " + refreshOptions.concurrency + "，间隔 " + refreshOptions.intervalSeconds + " 秒。");
+      log((currentOptions.startLog || "开始批量认证续期") + "，共 " + total + " 个，并发 " + refreshOptions.concurrency + "，间隔 " + refreshOptions.intervalSeconds + " 秒。");
       await Promise.all(Array.from({ length: Math.min(refreshOptions.concurrency, total) }, function () {
         return worker();
       }));
-      clearSelectionKeys(targetList.map(function (item) {
-        return item.key;
-      }));
-      selectionCleared = true;
-      setTaskProgress(progressId, "批量认证续期完成，正在同步文件状态…", 100, {
+      if (clearSelectionAfter) {
+        clearSelectionKeys(targetList.map(function (item) {
+          return item.key;
+        }));
+        selectionCleared = true;
+      }
+      setTaskProgress(progressId, currentOptions.reloadProgressText || "批量认证续期完成，正在同步文件状态…", 100, {
         done: total,
         total: total
       });
@@ -1161,7 +1480,7 @@ export function useConsoleFileActions(context) {
         progressTaskId: progressId
       });
       updateOperationDialog({
-        stage: failureCount ? "批量认证续期已完成，部分文件续期失败。" : "批量认证续期已全部完成。",
+        stage: failureCount ? (currentOptions.partialStage || "批量认证续期已完成，部分文件续期失败。") : (currentOptions.successStage || "批量认证续期已全部完成。"),
         activeNames: [],
         currentName: targetList[targetList.length - 1] ? targetList[targetList.length - 1].name : "",
         currentIndex: total,
@@ -1169,14 +1488,14 @@ export function useConsoleFileActions(context) {
         percent: 100,
         successCount: successCount,
         failureCount: failureCount,
-        latestMessage: "批量认证续期完成：成功 " + successCount + " 个，失败 " + failureCount + " 个。",
+        latestMessage: (currentOptions.completedMessagePrefix || "批量认证续期完成") + "：成功 " + successCount + " 个，失败 " + failureCount + " 个。",
         failureDetails: failureDetails,
         resultDetails: resultDetails,
         canClose: true,
         completed: true
       });
-      notify("批量认证续期完成：成功 " + successCount + " 个，失败 " + failureCount + " 个。", failureCount ? "warn" : "success", 4200);
-      completeTaskProgress(progressId, "批量认证续期完成。", {
+      notify((currentOptions.completedMessagePrefix || "批量认证续期完成") + "：成功 " + successCount + " 个，失败 " + failureCount + " 个。", failureCount ? "warn" : "success", 4200);
+      completeTaskProgress(progressId, currentOptions.completionText || "批量认证续期完成。", {
         tone: failureCount ? "warn" : "success",
         done: total,
         total: total,
@@ -1187,9 +1506,9 @@ export function useConsoleFileActions(context) {
         fail: failureCount
       };
     } catch (error) {
-      latestMessage = error && error.message ? error.message : "批量认证续期中断";
+      latestMessage = error && error.message ? error.message : (currentOptions.interruptedMessage || "批量认证续期中断");
       updateOperationDialog({
-        stage: "批量认证续期中断，请查看底部动态日志。",
+        stage: currentOptions.interruptedStage || "批量认证续期中断，请查看底部动态日志。",
         activeNames: [],
         currentIndex: done,
         total: total,
@@ -1202,9 +1521,9 @@ export function useConsoleFileActions(context) {
         canClose: true,
         completed: true
       });
-      log("批量认证续期中断：" + latestMessage, true);
-      notify("批量认证续期中断。\n" + latestMessage, "danger", 6200);
-      completeTaskProgress(progressId, "批量认证续期中断。", {
+      log((currentOptions.interruptedMessage || "批量认证续期中断") + "：" + latestMessage, true);
+      notify((currentOptions.interruptedMessage || "批量认证续期中断") + "。\n" + latestMessage, "danger", 6200);
+      completeTaskProgress(progressId, currentOptions.interruptionText || "批量认证续期中断。", {
         tone: "danger",
         done: done,
         total: total,
@@ -1212,13 +1531,13 @@ export function useConsoleFileActions(context) {
       });
       return null;
     } finally {
-      if (!selectionCleared) {
+      if (clearSelectionAfter && !selectionCleared) {
         clearSelectionKeys(targetList.map(function (item) {
           return item.key;
         }));
       }
       setBusy(false);
-      finishPending("refresh-credentials-selected");
+      finishPending(pendingType);
     }
   }
 
@@ -1276,6 +1595,36 @@ export function useConsoleFileActions(context) {
       cancelToast: "已取消批量删除。",
       emptyLog: "没有可删除的选中项。",
       emptyToast: "当前没有可删除的选中项。"
+    });
+  }
+
+  async function exportSelectedFiles() {
+    var list = state.items.filter(function (item) {
+      return state.selected[item.key] && !item.runtimeOnly;
+    });
+
+    if (!list.length) {
+      log("没有可导出的选中项。");
+      notify("当前没有可导出的选中项。", "info");
+      return;
+    }
+
+    await exportItems(list, {
+      confirmTitle: "确认导出选中文件",
+      confirmMessage: "确认导出已选中的 " + list.length + " 个原始认证文件吗？",
+      confirmText: "确认导出",
+      pendingType: "export-selected",
+      progressLabel: "正在准备导出选中文件…",
+      sequenceLabel: "正在导出选中文件",
+      startLog: "开始批量导出选中文件，共 " + list.length + " 个。",
+      completeText: "选中文件导出完成",
+      completeToastPrefix: "选中文件导出完成",
+      completeLogPrefix: "选中文件导出完成",
+      cancelLog: "用户取消了批量导出选中文件。",
+      cancelToast: "已取消批量导出选中文件。",
+      emptyLog: "没有可导出的选中项。",
+      emptyToast: "当前没有可导出的选中项。",
+      tone: "success"
     });
   }
 
@@ -1474,13 +1823,17 @@ export function useConsoleFileActions(context) {
     setItemsDisabled: setItemsDisabled,
     refreshOne: refreshOne,
     disableQuotaRelated: disableQuotaRelated,
+    exportItems: exportItems,
+    exportItemFile: exportItemFile,
     deleteSelected: deleteSelected,
+    exportSelectedFiles: exportSelectedFiles,
     disableSelected: disableSelected,
     enableSelected: enableSelected,
     revive401Item: revive401Item,
     reviveSelected401: reviveSelected401,
     refreshCredentialOne: refreshCredentialOne,
     refreshSelectedCredentials: refreshSelectedCredentials,
+    refreshAllCredentials: refreshAllCredentials,
     openUploadPicker: openUploadPicker,
     handleUploadFiles: handleUploadFiles,
     handleUploadChange: handleUploadChange,

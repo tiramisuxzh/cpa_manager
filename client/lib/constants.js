@@ -45,10 +45,48 @@ export const TOKEN_REFRESH_DEFAULTS = {
   concurrency: 3,
   intervalSeconds: 0
 };
+export const TOKEN_REFRESH_SCOPES = {
+  ALL: "all",
+  EXPIRED_OR_MISSING: "expired-or-missing",
+  WITHIN_1_DAY: "within-1-day",
+  WITHIN_3_DAYS: "within-3-days",
+  WITHIN_7_DAYS: "within-7-days",
+  WITHIN_30_DAYS: "within-30-days"
+};
+export const TOKEN_REFRESH_SCOPE_OPTIONS = [
+  { value: TOKEN_REFRESH_SCOPES.ALL, label: "全部文件" },
+  { value: TOKEN_REFRESH_SCOPES.EXPIRED_OR_MISSING, label: "已过期 / 未写入" },
+  { value: TOKEN_REFRESH_SCOPES.WITHIN_1_DAY, label: "1 天内到期" },
+  { value: TOKEN_REFRESH_SCOPES.WITHIN_3_DAYS, label: "3 天内到期" },
+  { value: TOKEN_REFRESH_SCOPES.WITHIN_7_DAYS, label: "7 天内到期" },
+  { value: TOKEN_REFRESH_SCOPES.WITHIN_30_DAYS, label: "30 天内到期" }
+];
 export const TOKEN_REFRESH_LIMITS = {
   concurrency: { min: 1, max: 10 },
   intervalSeconds: { min: 0, max: 30 }
 };
+
+export function normalizeTokenRefreshScope(value) {
+  var input = String(value || "").trim().toLowerCase();
+
+  if (input === TOKEN_REFRESH_SCOPES.EXPIRED_OR_MISSING) {
+    return TOKEN_REFRESH_SCOPES.EXPIRED_OR_MISSING;
+  }
+  if (input === TOKEN_REFRESH_SCOPES.WITHIN_1_DAY) {
+    return TOKEN_REFRESH_SCOPES.WITHIN_1_DAY;
+  }
+  if (input === TOKEN_REFRESH_SCOPES.WITHIN_3_DAYS) {
+    return TOKEN_REFRESH_SCOPES.WITHIN_3_DAYS;
+  }
+  if (input === TOKEN_REFRESH_SCOPES.WITHIN_7_DAYS) {
+    return TOKEN_REFRESH_SCOPES.WITHIN_7_DAYS;
+  }
+  if (input === TOKEN_REFRESH_SCOPES.WITHIN_30_DAYS) {
+    return TOKEN_REFRESH_SCOPES.WITHIN_30_DAYS;
+  }
+
+  return TOKEN_REFRESH_SCOPES.ALL;
+}
 
 // 自动刷新模式需要兼容旧版本本地缓存与 app-config.json，未知值统一回退到更稳妥的“只文件”。
 export function normalizeAutoRefreshMode(value) {
@@ -80,18 +118,25 @@ export const PENDING_GROUPS = {
     "refresh-selected-quotas",
     "refresh-credential-info-selected",
     "refresh-credentials-selected",
+    "refresh-all-credentials",
     "revive-selected",
     "upload",
+    "export-selected",
     "rescan",
     "disable-quota",
     "disable-selected",
     "delete-selected",
-    "enable-selected"
+    "enable-selected",
+    "sync-all-files",
+    "oauth-start",
+    "oauth-submit-callback",
+    "oauth-sync-after-login"
   ],
   row: [
     "row-refresh",
     "row-refresh-credential",
     "row-credential-info",
+    "row-export",
     "row-revive",
     "row-toggle-disabled",
     "row-delete"

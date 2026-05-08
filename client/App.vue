@@ -8,6 +8,7 @@ import ExternalIntegrationView from "./components/ExternalIntegrationView.vue";
 import FileDetailDrawer from "./components/FileDetailDrawer.vue";
 import FilePoolView from "./components/FilePoolView.vue";
 import IntegrationSettingsView from "./components/IntegrationSettingsView.vue";
+import OAuthLoginView from "./components/OAuthLoginView.vue";
 import OperationProgressDialog from "./components/OperationProgressDialog.vue";
 import QuotaPoolView from "./components/QuotaPoolView.vue";
 import RequestEventsView from "./components/RequestEventsView.vue";
@@ -61,6 +62,20 @@ var connectionReady = computed(function () {
 var wenfxlIntegrationReady = computed(function () {
   return !!String(consoleApp.integrationSettings.wenfxlOpenaiUrl || "").trim();
 });
+var oauthLoginMeta = computed(function () {
+  var status = String((consoleApp.oauthLogin && consoleApp.oauthLogin.status) || "idle");
+
+  if (status === "success") {
+    return consoleApp.oauthLogin.autoSyncing ? "登录成功，同步中" : "最近登录成功";
+  }
+  if (status === "waiting" || status === "starting") {
+    return "登录进行中";
+  }
+  if (status === "error") {
+    return "最近失败";
+  }
+  return "待开始";
+});
 
 var analytics = computed(function () {
   return consoleApp.analyticsCollections.value;
@@ -81,6 +96,19 @@ var routeItems = computed(function () {
       meta: consoleApp.state.items.length + " 个文件",
       showRefreshFiles: true,
       showRescan: true
+    },
+    {
+      id: "oauth-login",
+      sectionId: "file-management",
+      sectionTitle: "文件管理",
+      eyebrow: "File Management",
+      kicker: "OAUTH",
+      title: "OAuth 登录",
+      desc: "原生登录并自动把新凭证带回文件池",
+      pageDesc: "直接接入 cliproxyapi 官方管理中心同款的原生 OAuth 登录流程，登录完成后先轻量同步文件列表，再按目标文件补拉凭证信息。",
+      meta: oauthLoginMeta.value,
+      showRefreshFiles: false,
+      showRescan: false
     },
     {
       id: "quotas",
@@ -480,6 +508,7 @@ onMounted(function () {
 
       <main class="workspace-body" :class="{ immersive: immersiveRoute }">
         <FilePoolView v-if="activeRoute === 'files'" :console-app="consoleApp" :on-open-detail="openDetail" :on-open-credential="openCredential" />
+        <OAuthLoginView v-else-if="activeRoute === 'oauth-login'" :console-app="consoleApp" @open-route="switchRoute" />
         <QuotaPoolView v-else-if="activeRoute === 'quotas'" :console-app="consoleApp" :on-open-detail="openDetail" :on-open-credential="openCredential" />
         <DisabledPoolView v-else-if="activeRoute === 'disabled'" :console-app="consoleApp" :on-open-detail="openDetail" :on-open-credential="openCredential" />
         <ExceptionCenterView v-else-if="activeRoute === 'exceptions'" :console-app="consoleApp" :on-open-detail="openDetail" :on-open-credential="openCredential" />

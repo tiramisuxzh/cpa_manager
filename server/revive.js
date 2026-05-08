@@ -7,6 +7,7 @@ const OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback";
 const AUTH_FILE_WRAPPER_KEYS = ["data", "content", "file", "authFile", "auth_file", "result", "value"];
+const AUTH_FILE_LIST_WRAPPER_KEYS = ["files", "auth_files", "data", "result", "value"];
 const CREDENTIAL_DETAIL_FIELDS = [
   { key: "access_token", label: "Access Token" },
   { key: "refresh_token", label: "Refresh Token" },
@@ -35,6 +36,11 @@ function stringifyPayloadDetail(value) {
   } catch (_) {
     return trimText(value);
   }
+}
+
+function isPlaceholderMessage(value) {
+  const text = trimText(value);
+  return !text || text === "{}" || text === "[]" || text === "[object Object]";
 }
 
 function normalizeBaseUrl(value) {
@@ -94,7 +100,16 @@ function extractPayloadMessage(payload) {
 }
 
 function buildErrorMessage(response, payload, text, fallback) {
-  return extractPayloadMessage(payload) || trimText(text) || fallback || ("HTTP " + response.status);
+  const payloadMessage = extractPayloadMessage(payload);
+  const textMessage = trimText(text);
+
+  if (!isPlaceholderMessage(payloadMessage)) {
+    return payloadMessage;
+  }
+  if (!isPlaceholderMessage(textMessage)) {
+    return textMessage;
+  }
+  return fallback || ("HTTP " + response.status);
 }
 
 function requestTargetText(url) {
@@ -181,6 +196,36 @@ function unwrapAuthFileData(candidate) {
   }, null);
 }
 
+function unwrapAuthFileList(candidate) {
+  let normalized = candidate;
+
+  if (typeof normalized === "string") {
+    normalized = parseJsonSafe(normalized);
+  }
+  if (Array.isArray(normalized)) {
+    return normalized;
+  }
+  if (!isPlainObject(normalized)) {
+    return [];
+  }
+
+  return AUTH_FILE_LIST_WRAPPER_KEYS.reduce((result, key) => {
+    if (result.length || normalized[key] == null) {
+      return result;
+    }
+    return unwrapAuthFileList(normalized[key]);
+  }, []);
+}
+
+function isCodexFileEntry(item) {
+  const provider = trimText(item && (item.provider || item.type)).toLowerCase();
+  return provider === "codex";
+}
+
+function authFileName(item) {
+  return trimText(item && (item.name || item.fileName || item.file_name));
+}
+
 function compactIsoTime(date) {
   return new Date(date).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
@@ -262,6 +307,31 @@ async function downloadAuthFile(authFilesBase, key, fileName) {
     throw new Error("下载到的原始认证 JSON 为空");
   }
   return fileData;
+}
+
+async function listAuthFiles(authFilesBase, key) {
+  let result;
+
+  try {
+    result = await fetchText(
+      authFilesBase,
+      {
+        method: "GET",
+        headers: managementHeaders(key, {
+          Accept: "application/json, text/plain, */*"
+        })
+      }
+    );
+  } catch (error) {
+    throw new Error("获取认证文件列表失败：" + (error && error.message ? error.message : "未知错误"));
+  }
+
+  if (!result.response.ok) {
+    throw new Error(buildErrorMessage(result.response, result.payload, result.text, "获取认证文件列表失败"));
+  }
+  return unwrapAuthFileList(result.payload || result.text).filter(function (item) {
+    return isPlainObject(item) && isCodexFileEntry(item) && authFileName(item);
+  });
 }
 
 async function refreshOpenAIToken(refreshToken) {
@@ -475,12 +545,51 @@ async function uploadAuthFile(authFilesBase, key, fileName, fileData) {
   };
 }
 
+async function updateAuthFileDisabled(authFilesBase, key, fileName, disabled) {
+  let result;
+
+  try {
+    result = await fetchText(
+      authFilesBase + "/status",
+      {
+        method: "PATCH",
+        headers: managementHeaders(key, {
+          "Content-Type": "application/json"
+        }),
+        body: JSON.stringify({
+          name: fileName,
+          disabled: !!disabled
+        })
+      }
+    );
+  } catch (error) {
+    throw new Error("同步停用状态失败：" + (error && error.message ? error.message : "未知错误"));
+  }
+
+  if (!result.response.ok) {
+    throw new Error(buildErrorMessage(result.response, result.payload, result.text, "同步停用状态失败"));
+  }
+}
+
 function businessFailure(reason, message) {
   return {
     success: false,
     reason,
     message
   };
+}
+
+function exportedFileName(fileName) {
+  const normalized = trimText(fileName);
+
+  if (!normalized) {
+    return "auth-file.json";
+  }
+  return /\.json$/i.test(normalized) ? normalized : (normalized + ".json");
+}
+
+function exportedFileContent(fileData) {
+  return JSON.stringify(isPlainObject(fileData) ? fileData : {}, null, 2) + "\n";
 }
 
 // 这里统一封装 token 刷新和回写本体，普通凭证保活与 401 复活共用同一套底层规则，避免两条链路后续越改越分叉。
@@ -602,9 +711,162 @@ async function readAuthFileDetail(input) {
   };
 }
 
+// 导出文件需要拿到完整原始 JSON，这里直接复用现有下载逻辑，避免前端自己再拼管理接口与鉴权头。
+async function exportAuthFile(input) {
+  const body = isPlainObject(input) ? input : {};
+  const management = isPlainObject(body.management) ? body.management : {};
+  const item = isPlainObject(body.item) ? body.item : {};
+  const baseUrl = normalizeBaseUrl(management.baseUrl);
+  const key = trimText(management.key);
+  const fileName = trimText(item.name);
+  const authFilesBase = normalizeAuthFilesBase(baseUrl);
+  let fullItemData;
+
+  if (!baseUrl || !key || !fileName || !authFilesBase) {
+    throw new Error("缺少导出文件所需的管理地址、Key 或文件名");
+  }
+  if (item.runtimeOnly) {
+    return businessFailure("export_runtime_only", "运行时内存账号不支持导出原始文件。");
+  }
+
+  try {
+    fullItemData = await downloadAuthFile(authFilesBase, key, fileName);
+  } catch (error) {
+    return businessFailure("export_download_failed", error && error.message ? error.message : "下载原始认证文件失败");
+  }
+
+  return {
+    success: true,
+    reason: "auth_file_exported",
+    message: "原始认证文件已导出。",
+    fileName: exportedFileName(fileName),
+    contentText: exportedFileContent(fullItemData)
+  };
+}
+
+function buildSyncResultItem(status, name, message, extra) {
+  return Object.assign({
+    status,
+    name: name || "未命名文件",
+    message: message || ""
+  }, extra || {});
+}
+
+// 文件同步优先复用单文件下载与上传逻辑，只在这一层补充目标端去重和 disabled 状态同步，避免再维护一套平行实现。
+async function syncAuthFiles(input) {
+  const body = isPlainObject(input) ? input : {};
+  const sourceManagement = isPlainObject(body.sourceManagement) ? body.sourceManagement : {};
+  const targetManagement = isPlainObject(body.targetManagement) ? body.targetManagement : {};
+  const options = isPlainObject(body.options) ? body.options : {};
+  const sourceBaseUrl = normalizeBaseUrl(sourceManagement.baseUrl);
+  const sourceKey = trimText(sourceManagement.key);
+  const targetBaseUrl = normalizeBaseUrl(targetManagement.baseUrl);
+  const targetKey = trimText(targetManagement.key);
+  const sourceAuthFilesBase = normalizeAuthFilesBase(sourceBaseUrl);
+  const targetAuthFilesBase = normalizeAuthFilesBase(targetBaseUrl);
+  const skipExisting = options.skipExisting !== false;
+  const results = [];
+  const targetExistingNames = {};
+  let sourceFiles;
+  let targetFiles;
+  let index;
+  let syncedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  if (!sourceBaseUrl || !sourceKey || !targetBaseUrl || !targetKey || !sourceAuthFilesBase || !targetAuthFilesBase) {
+    throw new Error("缺少源端或目标端的管理地址、Management Key");
+  }
+  if (sourceAuthFilesBase === targetAuthFilesBase && sourceKey === targetKey) {
+    throw new Error("源端与目标端配置相同，已阻止本次自同步。");
+  }
+
+  try {
+    sourceFiles = await listAuthFiles(sourceAuthFilesBase, sourceKey);
+  } catch (error) {
+    throw new Error("源端文件列表访问失败：" + (error && error.message ? error.message : "未知错误"));
+  }
+  if (!sourceFiles.length) {
+    return {
+      success: true,
+      reason: "sync_empty",
+      message: "源端当前没有可同步的 Codex 文件。",
+      total: 0,
+      syncedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      results: []
+    };
+  }
+
+  if (skipExisting) {
+    try {
+      targetFiles = await listAuthFiles(targetAuthFilesBase, targetKey);
+    } catch (error) {
+      throw new Error("目标端文件列表访问失败：" + (error && error.message ? error.message : "未知错误"));
+    }
+    targetFiles.forEach(function (item) {
+      targetExistingNames[authFileName(item)] = true;
+    });
+  }
+
+  // 这里按源端文件顺序逐个同步，优先保证失败原因可回溯；后续如果量级明显上来，再引入并发也更容易控制目标端压力。
+  for (index = 0; index < sourceFiles.length; index += 1) {
+    const sourceItem = sourceFiles[index];
+    const fileName = authFileName(sourceItem);
+    let fileData;
+    let uploadResult;
+
+    if (!fileName) {
+      failedCount += 1;
+      results.push(buildSyncResultItem("failed", "", "文件名缺失，已跳过。"));
+      continue;
+    }
+
+    if (skipExisting && targetExistingNames[fileName]) {
+      skippedCount += 1;
+      results.push(buildSyncResultItem("skipped", fileName, "目标端已存在同名文件，已按当前策略跳过。"));
+      continue;
+    }
+
+    try {
+      fileData = await downloadAuthFile(sourceAuthFilesBase, sourceKey, fileName);
+      uploadResult = await uploadAuthFile(targetAuthFilesBase, targetKey, fileName, fileData);
+
+      if (!!sourceItem.disabled) {
+        await updateAuthFileDisabled(targetAuthFilesBase, targetKey, fileName, true);
+      }
+
+      syncedCount += 1;
+      targetExistingNames[fileName] = true;
+      results.push(buildSyncResultItem("success", fileName, !!sourceItem.disabled ? "文件与停用状态已同步。" : "文件已同步。", {
+        uploadMode: uploadResult.uploadMode,
+        disabled: !!sourceItem.disabled
+      }));
+    } catch (error) {
+      failedCount += 1;
+      results.push(buildSyncResultItem("failed", fileName, error && error.message ? error.message : "同步失败"));
+    }
+  }
+
+  return {
+    success: true,
+    reason: "sync_completed",
+    message: "文件同步完成。",
+    total: sourceFiles.length,
+    syncedCount,
+    skippedCount,
+    failedCount,
+    skipExisting,
+    results
+  };
+}
+
 module.exports = {
+  exportAuthFile,
   readAuthFileDetail,
   refreshAuthCredential,
   reviveAuthFile,
+  syncAuthFiles,
   REVIVE_WAIT_MS
 };

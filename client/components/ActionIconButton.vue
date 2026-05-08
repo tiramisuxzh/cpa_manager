@@ -90,6 +90,12 @@ function handleClick(event) {
       <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" />
     </svg>
 
+    <svg v-else-if="props.icon === 'export'" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 4v10" />
+      <path d="M8 10l4 4l4-4" />
+      <path d="M5 19h14" />
+    </svg>
+
     <svg v-else-if="props.icon === 'enable'" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M20 6L9 17l-5-5" />
     </svg>

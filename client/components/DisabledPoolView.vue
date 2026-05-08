@@ -150,6 +150,7 @@ var selectionStats = computed(function () {
   return {
     total: selected.length,
     deletable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
+    exportable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
     enableable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
     refreshable: selected.filter(function (item) { return item.authIndex && item.accountId; }).length,
     credentialInfoRefreshable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
@@ -318,6 +319,9 @@ function warningRemainText() {
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.credentialRefreshable" :aria-busy="props.consoleApp.isPending('refresh-credentials-selected') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedCredentials">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-credentials-selected') }">{{ pendingText('refresh-credentials-selected', '批量认证续期', '续期中') }}</span>
           </button>
+          <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.exportable" :aria-busy="props.consoleApp.isPending('export-selected') ? 'true' : 'false'" @click="props.consoleApp.exportSelectedFiles">
+            <span class="button-label" :class="{ pending: props.consoleApp.isPending('export-selected') }">{{ pendingText('export-selected', '导出选中', '导出中') }}</span>
+          </button>
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.enableable" :aria-busy="props.consoleApp.isPending('enable-selected') ? 'true' : 'false'" @click="props.consoleApp.enableSelected">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('enable-selected') }">{{ pendingText('enable-selected', '启用选中', '启用中') }}</span>
           </button>
@@ -465,6 +469,13 @@ function warningRemainText() {
               :disabled="workbenchPending() || rowPending(item) || !item.authIndex || !item.accountId"
               :pending="props.consoleApp.isPending('row-refresh', item.key)"
               @click="props.consoleApp.refreshOne(item.key)"
+            />
+            <ActionIconButton
+              title="导出文件"
+              icon="export"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-export', item.key)"
+              @click="props.consoleApp.exportItemFile(item, { pendingType: 'row-export', pendingKey: item.key })"
             />
             <ActionIconButton
               title="启用文件"

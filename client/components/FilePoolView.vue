@@ -127,6 +127,7 @@ var selectionStats = computed(function () {
   return {
     total: selected.length,
     deletable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
+    exportable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
     disableable: selected.filter(function (item) { return item.name && !item.runtimeOnly && !item.disabled; }).length,
     enableable: selected.filter(function (item) { return item.name && !item.runtimeOnly && item.disabled; }).length,
     refreshable: selected.filter(function (item) { return item.authIndex && item.accountId; }).length,
@@ -170,6 +171,14 @@ function pendingText(type, idleText, loadingText, key) {
 
 function workbenchPending() {
   return props.consoleApp.hasPending(PENDING_GROUPS.workbench);
+}
+
+function sourceConnectionReady() {
+  return !!String(props.consoleApp.settings.baseUrl || "").trim() && !!String(props.consoleApp.settings.key || "").trim();
+}
+
+function syncTargetReady() {
+  return !!String(props.consoleApp.settings.syncTargetBaseUrl || "").trim() && !!String(props.consoleApp.settings.syncTargetKey || "").trim();
 }
 
 function rowPending(item) {
@@ -327,6 +336,9 @@ function pageSizeText(size) {
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.credentialRefreshable" :aria-busy="props.consoleApp.isPending('refresh-credentials-selected') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedCredentials">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-credentials-selected') }">{{ pendingText('refresh-credentials-selected', '批量认证续期', '续期中') }}</span>
           </button>
+          <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.exportable" :aria-busy="props.consoleApp.isPending('export-selected') ? 'true' : 'false'" @click="props.consoleApp.exportSelectedFiles">
+            <span class="button-label" :class="{ pending: props.consoleApp.isPending('export-selected') }">{{ pendingText('export-selected', '导出选中', '导出中') }}</span>
+          </button>
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.disableable" :aria-busy="props.consoleApp.isPending('disable-selected') ? 'true' : 'false'" @click="props.consoleApp.disableSelected">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('disable-selected') }">{{ pendingText('disable-selected', '停用选中', '停用中') }}</span>
           </button>
@@ -339,6 +351,9 @@ function pageSizeText(size) {
           <button class="ghost-btn" type="button" :disabled="workbenchPending() || !selectionStats.total" @click="props.consoleApp.clearSelection">清空勾选</button>
         </div>
 
+        <button class="secondary-btn" type="button" :disabled="workbenchPending() || !sourceConnectionReady() || !syncTargetReady()" :aria-busy="props.consoleApp.isPending('sync-all-files') ? 'true' : 'false'" @click="props.consoleApp.syncAllFilesToTarget">
+          <span class="button-label" :class="{ pending: props.consoleApp.isPending('sync-all-files') }">{{ pendingText('sync-all-files', '同步到另一台', '同步中') }}</span>
+        </button>
         <button class="secondary-btn" type="button" :disabled="workbenchPending()" :aria-busy="props.consoleApp.isPending('upload') ? 'true' : 'false'" @click="triggerUpload">
           <span class="button-label" :class="{ pending: props.consoleApp.isPending('upload') }">{{ pendingText('upload', '导入文件', '上传中') }}</span>
         </button>
@@ -486,6 +501,13 @@ function pageSizeText(size) {
               :disabled="workbenchPending() || rowPending(item) || !item.authIndex || !item.accountId"
               :pending="props.consoleApp.isPending('row-refresh', item.key)"
               @click="props.consoleApp.refreshOne(item.key)"
+            />
+            <ActionIconButton
+              title="导出文件"
+              icon="export"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-export', item.key)"
+              @click="props.consoleApp.exportItemFile(item, { pendingType: 'row-export', pendingKey: item.key })"
             />
             <ActionIconButton title="复制文件名" icon="copy" :disabled="!item.name" @click="props.consoleApp.copyName(item.name)" />
             <ActionIconButton

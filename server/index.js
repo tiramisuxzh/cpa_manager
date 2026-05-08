@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const { readConfig, clientConfig, serverConfig, writeManagementConfig, writeIntegrationConfig } = require("./config");
-const { readAuthFileDetail, refreshAuthCredential, reviveAuthFile } = require("./revive");
+const { exportAuthFile, readAuthFileDetail, refreshAuthCredential, reviveAuthFile, syncAuthFiles } = require("./revive");
 
 const APP_CONFIG = readConfig();
 const SERVER_OPTIONS = serverConfig(APP_CONFIG);
@@ -156,6 +156,29 @@ app.post("/api/auth-file-detail", requireTrustedRequest, async (req, res) => {
   }
 });
 
+app.post("/api/export-auth-file", requireTrustedRequest, async (req, res) => {
+  const input = req.body && typeof req.body === "object" ? req.body : null;
+  const management = input && input.management;
+  const item = input && input.item;
+
+  // 导出接口同样只接受显式的管理配置与文件信息，避免把空请求误处理成“导出了空内容”。
+  if (!input || !management || typeof management !== "object" || Array.isArray(management) || !item || typeof item !== "object" || Array.isArray(item)) {
+    res.status(400).json({ error: "导出文件请求格式不正确" });
+    return;
+  }
+  if (!String(management.baseUrl || "").trim() || !String(management.key || "").trim() || !String(item.name || "").trim()) {
+    res.status(400).json({ error: "缺少管理地址、Management Key 或文件名" });
+    return;
+  }
+
+  try {
+    res.json(await exportAuthFile(input));
+  } catch (error) {
+    console.error("[export-auth-file] failed:", error);
+    res.status(500).json({ error: error && error.message ? error.message : "导出文件失败" });
+  }
+});
+
 app.post("/api/revive-auth-file", requireTrustedRequest, async (req, res) => {
   const input = req.body && typeof req.body === "object" ? req.body : null;
   const management = input && input.management;
@@ -199,6 +222,42 @@ app.post("/api/refresh-auth-file", requireTrustedRequest, async (req, res) => {
   } catch (error) {
     console.error("[refresh-auth-file] failed:", error);
     res.status(500).json({ error: error && error.message ? error.message : "刷新凭证失败" });
+  }
+});
+
+app.post("/api/sync-auth-files", requireTrustedRequest, async (req, res) => {
+  const input = req.body && typeof req.body === "object" ? req.body : null;
+  const sourceManagement = input && input.sourceManagement;
+  const targetManagement = input && input.targetManagement;
+
+  // 文件同步需要同时校验源端与目标端配置，避免前端只传了一半参数时落成“空同步”。
+  if (
+    !input
+    || !sourceManagement
+    || typeof sourceManagement !== "object"
+    || Array.isArray(sourceManagement)
+    || !targetManagement
+    || typeof targetManagement !== "object"
+    || Array.isArray(targetManagement)
+  ) {
+    res.status(400).json({ error: "文件同步请求格式不正确" });
+    return;
+  }
+  if (
+    !String(sourceManagement.baseUrl || "").trim()
+    || !String(sourceManagement.key || "").trim()
+    || !String(targetManagement.baseUrl || "").trim()
+    || !String(targetManagement.key || "").trim()
+  ) {
+    res.status(400).json({ error: "缺少源端或目标端的管理地址、Management Key" });
+    return;
+  }
+
+  try {
+    res.json(await syncAuthFiles(input));
+  } catch (error) {
+    console.error("[sync-auth-files] failed:", error);
+    res.status(500).json({ error: error && error.message ? error.message : "文件同步失败" });
   }
 });
 

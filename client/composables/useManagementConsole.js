@@ -11,7 +11,8 @@ import {
   AUTO_REFRESH_MODES,
   TOKEN_REFRESH_DEFAULTS,
   TOKEN_REFRESH_LIMITS,
-  normalizeAutoRefreshMode
+  normalizeAutoRefreshMode,
+  normalizeTokenRefreshScope
 } from "../lib/constants.js";
 import {
   readSettings,
@@ -24,6 +25,7 @@ import {
 import { useConsoleConfirm } from "./useConsoleConfirm.js";
 import { useConsoleFeedback } from "./useConsoleFeedback.js";
 import { useConsoleFileActions } from "./useConsoleFileActions.js";
+import { useOAuthWorkspace } from "./useOAuthWorkspace.js";
 
 function normalizedSettings(settings) {
   var lowQuotaThreshold = parseInt(settings.lowQuotaThreshold, 10);
@@ -36,10 +38,14 @@ function normalizedSettings(settings) {
     baseUrl: String(settings.baseUrl || "").trim().replace(/\/+$/, ""),
     key: String(settings.key || "").trim(),
     reviveProxyUrl: String(settings.reviveProxyUrl || "").trim(),
+    syncTargetBaseUrl: String(settings.syncTargetBaseUrl || "").trim().replace(/\/+$/, ""),
+    syncTargetKey: String(settings.syncTargetKey || "").trim(),
+    syncSkipExisting: settings.syncSkipExisting !== false,
     interval: Math.max(1, parseInt(settings.interval, 10) || 10),
     showFilename: !!settings.showFilename,
     autoRefresh: !!settings.autoRefresh,
     autoRefreshMode: normalizeAutoRefreshMode(settings.autoRefreshMode),
+    tokenRefreshScope: normalizeTokenRefreshScope(settings.tokenRefreshScope),
     lowQuotaThreshold: Math.max(0, Math.min(100, Number.isNaN(lowQuotaThreshold) ? 20 : lowQuotaThreshold)),
     quotaConcurrency: Math.max(1, Math.min(20, Number.isNaN(quotaConcurrency) ? 6 : quotaConcurrency)),
     quotaRequestIntervalSeconds: Math.max(0, Math.min(30, Number.isNaN(quotaRequestIntervalSeconds) ? 0 : quotaRequestIntervalSeconds)),
@@ -682,6 +688,20 @@ export function useManagementConsole() {
       concurrency: currentSettings.tokenRefreshConcurrency,
       intervalSeconds: currentSettings.tokenRefreshIntervalSeconds
     };
+  }
+
+  function buildSyncResultDetails(results) {
+    return (Array.isArray(results) ? results : []).map(function (item, index) {
+      return {
+        key: item && item.name ? (item.name + "::sync::" + index) : ("sync-result-" + index),
+        name: item && item.name ? item.name : "未命名文件",
+        status: item && item.status ? item.status : "failed",
+        message: item && item.message ? item.message : "未返回执行信息",
+        compareFields: [],
+        beforeText: "",
+        afterText: ""
+      };
+    });
   }
 
   function credentialInfoTargets(list) {
@@ -1924,7 +1944,7 @@ export function useManagementConsole() {
       emptyLog: "当前没有可刷新的选中额度对象。",
       emptyToast: "当前没有可刷新的选中额度对象。",
       failToast: "选中额度刷新失败，请检查连接。",
-      includeUsage: false
+      includeUsage: true
     }, options || {}));
 
     clearSelectionKeys(selectedItems.map(function (item) {
@@ -1980,6 +2000,180 @@ export function useManagementConsole() {
       return item.key;
     }));
     return result;
+  }
+
+  async function syncAllFilesToTarget(options) {
+    var currentOptions = options || {};
+    var currentSettings = normalizedSettings(settings);
+    var pendingType = currentOptions.pendingType || "sync-all-files";
+    var pendingKey = currentOptions.pendingKey || "";
+    var progressId = resolveProgressTaskId(currentOptions.progressTaskId, pendingType, pendingKey);
+    var sourceReady = !!currentSettings.baseUrl && !!currentSettings.key;
+    var targetReady = !!currentSettings.syncTargetBaseUrl && !!currentSettings.syncTargetKey;
+    var expectedTotal = state.items.filter(function (item) {
+      return item && item.name && !item.runtimeOnly;
+    }).length;
+    var result;
+    var resultDetails;
+    var failureDetails;
+    var latestMessage;
+    var resultTotal;
+    var syncedCount;
+    var skippedCount;
+    var failedCount;
+
+    if (!sourceReady) {
+      notify("请先填写源端管理地址和 Management Key。", "info");
+      log("未填写源端管理地址或 Management Key，无法同步文件。", true);
+      return null;
+    }
+    if (!targetReady) {
+      notify("请先填写目标 cliproxyapi 的管理地址和 Management Key。", "info");
+      log("未填写目标端管理地址或 Management Key，无法同步文件。", true);
+      return null;
+    }
+    if (currentSettings.baseUrl === currentSettings.syncTargetBaseUrl && currentSettings.key === currentSettings.syncTargetKey) {
+      notify("目标端与源端相同，已阻止本次自同步。", "danger", 3600);
+      log("目标端与源端配置相同，已阻止本次自同步。", true);
+      return null;
+    }
+
+    if (!await confirm.askConfirm({
+      title: "确认同步到另一台 cliproxyapi",
+      message: "将把当前源管理地址下的 Codex 文件同步到目标管理台。",
+      items: [
+        "源端：" + currentSettings.baseUrl,
+        "目标端：" + currentSettings.syncTargetBaseUrl
+      ],
+      listTitle: "本次同步范围",
+      note: currentSettings.syncSkipExisting
+        ? "默认策略：目标端已存在同名文件时自动跳过，不做覆盖。"
+        : "当前策略：目标端同名文件会继续尝试上传，请先确认不会误覆盖。",
+      confirmText: "确认同步",
+      cancelText: "取消",
+      tone: "warn"
+    })) {
+      log("用户取消了文件同步到另一台 cliproxyapi。");
+      notify("已取消文件同步。", "info");
+      return null;
+    }
+
+    startPending(pendingType, pendingKey);
+    setBusy(true);
+    closeOperationDialog(true);
+    showOperationDialog({
+      title: "同步到另一台 cliproxyapi",
+      stage: "正在由本地服务批量同步文件…",
+      currentName: "",
+      currentIndex: 0,
+      total: expectedTotal,
+      percent: expectedTotal ? 12 : 0,
+      successCount: 0,
+      failureCount: 0,
+      successLabel: "实际同步成功",
+      failureLabel: "同步失败",
+      latestMessage: currentSettings.syncSkipExisting ? "目标端同名文件会自动跳过。" : "目标端同名文件将继续尝试上传。",
+      failureDetails: [],
+      resultDetails: [],
+      canClose: false,
+      completed: false
+    });
+    setTaskProgress(progressId, "正在同步文件到目标管理台…", 14, {
+      done: 0,
+      total: expectedTotal
+    });
+
+    try {
+      log("开始同步文件到另一台 cliproxyapi，目标端 " + currentSettings.syncTargetBaseUrl + "。");
+      result = await api.syncAuthFiles({
+        skipExisting: currentSettings.syncSkipExisting
+      });
+      resultTotal = result && result.total != null ? (Number(result.total) || 0) : expectedTotal;
+      syncedCount = result && result.syncedCount != null ? (Number(result.syncedCount) || 0) : 0;
+      skippedCount = result && result.skippedCount != null ? (Number(result.skippedCount) || 0) : 0;
+      failedCount = result && result.failedCount != null ? (Number(result.failedCount) || 0) : 0;
+      resultDetails = buildSyncResultDetails(result && result.results);
+      failureDetails = (Array.isArray(result && result.results) ? result.results : []).filter(function (item) {
+        return item && item.status === "failed";
+      }).map(function (item, index) {
+        return {
+          key: item && item.name ? (item.name + "::failure::" + index) : ("sync-failure-" + index),
+          name: item && item.name ? item.name : "未命名文件",
+          message: item && item.message ? item.message : "同步失败"
+        };
+      });
+      latestMessage = "同步完成：成功 " + syncedCount + " 个，跳过 " + skippedCount + " 个，失败 " + failedCount + " 个。";
+      if (failedCount && failureDetails.length) {
+        latestMessage += " 首个失败：" + failureDetails[0].name + " · " + failureDetails[0].message;
+      }
+
+      updateOperationDialog({
+        stage: failedCount
+          ? "文件同步已完成，部分文件同步失败。"
+          : (skippedCount ? "文件同步已完成，部分同名文件已按策略跳过。" : "文件同步已全部完成。"),
+        currentName: "",
+        currentIndex: resultTotal,
+        total: resultTotal,
+        percent: 100,
+        successCount: syncedCount,
+        failureCount: failedCount,
+        latestMessage: latestMessage,
+        failureDetails: failureDetails,
+        resultDetails: resultDetails,
+        canClose: true,
+        completed: true
+      });
+      completeTaskProgress(progressId, "文件同步完成。", {
+        tone: failedCount ? "warn" : "success",
+        done: resultTotal,
+        total: resultTotal,
+        hideDelayMs: failedCount ? 2400 : 1600
+      });
+      failureDetails.forEach(function (item) {
+        log("文件同步失败：" + item.name + " · " + item.message, true);
+      });
+      notify(latestMessage, failedCount ? "warn" : "success", 4200);
+      log(latestMessage);
+      return result;
+    } catch (error) {
+      latestMessage = error && error.message ? error.message : "文件同步失败";
+      updateOperationDialog({
+        stage: "文件同步失败，请查看执行结果。",
+        currentName: "",
+        currentIndex: 0,
+        total: expectedTotal,
+        percent: 100,
+        successCount: 0,
+        failureCount: 1,
+        latestMessage: latestMessage,
+        failureDetails: [{
+          key: "sync-all-files-error",
+          name: "批量同步任务",
+          message: latestMessage
+        }],
+        resultDetails: [{
+          key: "sync-all-files-error",
+          name: "批量同步任务",
+          status: "failed",
+          message: latestMessage,
+          compareFields: [],
+          beforeText: "",
+          afterText: ""
+        }],
+        canClose: true,
+        completed: true
+      });
+      completeTaskProgress(progressId, "文件同步失败。", {
+        tone: "danger",
+        hideDelayMs: 2600
+      });
+      notify("文件同步失败。\n" + latestMessage, "danger", 6200);
+      log("文件同步失败：" + latestMessage, true);
+      return null;
+    } finally {
+      setBusy(false);
+      finishPending(pendingType, pendingKey);
+    }
   }
 
   async function loadAll(options) {
@@ -2355,6 +2549,17 @@ export function useManagementConsole() {
     ui.credentialDetailKey = "";
   }
 
+  var oauthWorkspace = useOAuthWorkspace({
+    api: api,
+    loadFiles: loadFiles,
+    state: state,
+    readCredentialInfo: readCredentialInfo,
+    startPending: startPending,
+    finishPending: finishPending,
+    notify: notify,
+    log: log
+  });
+
   var fileActions = useConsoleFileActions({
     api: api,
     state: state,
@@ -2422,6 +2627,9 @@ export function useManagementConsole() {
       settings.showFilename,
       settings.autoRefresh,
       settings.autoRefreshMode,
+      settings.syncTargetBaseUrl,
+      settings.syncSkipExisting,
+      settings.tokenRefreshScope,
       settings.lowQuotaThreshold,
       settings.quotaConcurrency,
       settings.quotaRequestIntervalSeconds,
@@ -2508,6 +2716,7 @@ export function useManagementConsole() {
     appConfig: appConfig,
     settings: settings,
     integrationSettings: integrationSettings,
+    oauthLogin: oauthWorkspace.oauthLogin,
     state: state,
     ui: ui,
     operationDialog: ui.operationDialog,
@@ -2527,6 +2736,7 @@ export function useManagementConsole() {
     refreshDisabledQuotas: refreshDisabledQuotas,
     refreshSelectedQuotas: refreshSelectedQuotas,
     refreshSelectedCredentialInfo: refreshSelectedCredentialInfo,
+    syncAllFilesToTarget: syncAllFilesToTarget,
     loadUsageEvents: loadUsageEvents,
     exportUsageSnapshot: exportUsageSnapshot,
     refreshServiceState: refreshServiceState,
@@ -2540,13 +2750,16 @@ export function useManagementConsole() {
     runCurrentAutoRefreshMode: runCurrentAutoRefreshMode,
     deleteItems: fileActions.deleteItems,
     setItemsDisabled: fileActions.setItemsDisabled,
+    exportItems: fileActions.exportItems,
     refreshOne: fileActions.refreshOne,
     revive401Item: fileActions.revive401Item,
     reviveSelected401: fileActions.reviveSelected401,
     refreshCredentialOne: fileActions.refreshCredentialOne,
     refreshSelectedCredentials: fileActions.refreshSelectedCredentials,
+    refreshAllCredentials: fileActions.refreshAllCredentials,
     disableQuotaRelated: fileActions.disableQuotaRelated,
     deleteSelected: fileActions.deleteSelected,
+    exportSelectedFiles: fileActions.exportSelectedFiles,
     disableSelected: fileActions.disableSelected,
     enableSelected: fileActions.enableSelected,
     openUploadPicker: fileActions.openUploadPicker,
@@ -2554,6 +2767,7 @@ export function useManagementConsole() {
     handleUploadChange: fileActions.handleUploadChange,
     setFileDisabled: fileActions.setFileDisabled,
     deleteFile: fileActions.deleteFile,
+    exportItemFile: fileActions.exportItemFile,
     copyName: fileActions.copyName,
     selectRow: selectRow,
     togglePageSelection: togglePageSelection,
@@ -2563,6 +2777,9 @@ export function useManagementConsole() {
     closeDetail: closeDetail,
     openCredentialInfo: openCredentialInfo,
     closeCredentialInfo: closeCredentialInfo,
+    startCodexOAuth: oauthWorkspace.startCodexOAuth,
+    submitCodexOAuthCallback: oauthWorkspace.submitCodexOAuthCallback,
+    resetOAuthWorkspace: oauthWorkspace.resetOAuthWorkspace,
     readCredentialInfo: readCredentialInfo,
     closeOperationDialog: closeOperationDialog,
     notify: notify,

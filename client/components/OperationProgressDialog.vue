@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 var RESULT_PAGE_SIZE = 5;
+var FAILURE_PREVIEW_SIZE = 5;
 
 var props = defineProps({
   dialog: {
@@ -54,12 +55,32 @@ function pagedResultDetails(dialog) {
   return resultDetails(dialog).slice(start, start + RESULT_PAGE_SIZE);
 }
 
+function failurePreview(dialog) {
+  return failureDetails(dialog).slice(0, FAILURE_PREVIEW_SIZE);
+}
+
+function hiddenFailureCount(dialog) {
+  return Math.max(0, failureDetails(dialog).length - FAILURE_PREVIEW_SIZE);
+}
+
 function resultStatusText(item) {
-  return item && item.status === "success" ? "成功" : "失败";
+  if (item && item.status === "success") {
+    return "成功";
+  }
+  if (item && item.status === "skipped") {
+    return "跳过";
+  }
+  return "失败";
 }
 
 function resultStatusClass(item) {
-  return item && item.status === "success" ? "tone-success" : "tone-danger";
+  if (item && item.status === "success") {
+    return "tone-success";
+  }
+  if (item && item.status === "skipped") {
+    return "tone-warn";
+  }
+  return "tone-danger";
 }
 
 function compareFields(item) {
@@ -146,6 +167,24 @@ watch(function () {
             </div>
 
             <p class="detail-message">{{ dialog.latestMessage || "批量任务执行中，过程会同步写入底部动态日志。" }}</p>
+
+            <section v-if="failureDetails(dialog).length" class="failure-card">
+              <div class="failure-head">
+                <strong>失败原因</strong>
+                <span>共 {{ failureDetails(dialog).length }} 条</span>
+              </div>
+
+              <ul class="failure-list">
+                <li v-for="item in failurePreview(dialog)" :key="item.key || (item.name + item.message)">
+                  <strong>{{ item.name || "未命名文件" }}</strong>
+                  <span>{{ item.message || "未返回明确失败原因" }}</span>
+                </li>
+              </ul>
+
+              <p v-if="hiddenFailureCount(dialog)" class="failure-more">
+                其余 {{ hiddenFailureCount(dialog) }} 条失败原因可在下方“结果明细”里继续查看。
+              </p>
+            </section>
 
             <div v-if="resultDetails(dialog).length" class="detail-actions">
               <button class="detail-toggle" type="button" @click="resultExpanded = !resultExpanded">
@@ -366,6 +405,68 @@ watch(function () {
 .detail-actions {
   display: flex;
   justify-content: flex-start;
+}
+
+.failure-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(220, 38, 38, 0.14);
+  background: rgba(255, 241, 241, 0.72);
+}
+
+.failure-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.failure-head strong {
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.failure-head span,
+.failure-more {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.failure-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.failure-list li {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(220, 38, 38, 0.08);
+}
+
+.failure-list strong {
+  color: var(--text-strong);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.failure-list span {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .detail-toggle {

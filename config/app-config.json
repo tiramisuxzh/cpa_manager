@@ -1,21 +1,24 @@
 {
   "management": {
-    "baseUrl": "http://localhost:8317",
-    "key": "",
+    "baseUrl": "http://43.134.86.172:8317",
+    "key": "1qaz@WSX",
     "reviveProxyUrl": "http://127.0.0.1:7890",
-    "tokenRefreshConcurrency": 5,
-    "tokenRefreshIntervalSeconds": 3,
+    "syncTargetBaseUrl": "",
+    "syncTargetKey": "",
+    "syncSkipExisting": false,
+    "tokenRefreshConcurrency": 10,
+    "tokenRefreshIntervalSeconds": 2,
     "interval": 30,
     "showFilename": false,
     "autoRefresh": true,
     "autoRefreshMode": "files",
-    "lowQuotaThreshold": 20,
-    "quotaConcurrency": 12,
+    "lowQuotaThreshold": 15,
+    "quotaConcurrency": 15,
     "quotaRequestIntervalSeconds": 2
   },
   "integrations": {
     "wenfxlOpenai": {
-      "url": ""
+      "url": "http://170.106.152.6:8000"
     }
   },
   "remote": {

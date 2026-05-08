@@ -137,6 +137,7 @@ var selectionStats = computed(function () {
   });
   return {
     total: selected.length,
+    exportable: selected.filter(function (item) { return item.name && !item.runtimeOnly; }).length,
     disableable: selected.filter(function (item) { return item.name && !item.runtimeOnly && !item.disabled; }).length,
     enableable: selected.filter(function (item) { return item.name && !item.runtimeOnly && item.disabled; }).length,
     refreshable: selected.filter(function (item) { return item.authIndex && item.accountId; }).length,
@@ -277,6 +278,9 @@ function warningRemainText() {
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.credentialInfoRefreshable" :aria-busy="props.consoleApp.isPending('refresh-credential-info-selected') ? 'true' : 'false'" @click="props.consoleApp.refreshSelectedCredentialInfo">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('refresh-credential-info-selected') }">{{ pendingText('refresh-credential-info-selected', '同步选中凭证信息', '同步凭证中') }}</span>
           </button>
+          <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.exportable" :aria-busy="props.consoleApp.isPending('export-selected') ? 'true' : 'false'" @click="props.consoleApp.exportSelectedFiles">
+            <span class="button-label" :class="{ pending: props.consoleApp.isPending('export-selected') }">{{ pendingText('export-selected', '导出选中', '导出中') }}</span>
+          </button>
           <button class="secondary-btn" type="button" :disabled="workbenchPending() || !selectionStats.disableable" :aria-busy="props.consoleApp.isPending('disable-selected') ? 'true' : 'false'" @click="props.consoleApp.disableSelected">
             <span class="button-label" :class="{ pending: props.consoleApp.isPending('disable-selected') }">{{ pendingText('disable-selected', '停用选中', '停用中') }}</span>
           </button>
@@ -353,10 +357,10 @@ function warningRemainText() {
         </label>
         <span>账号 / 文件</span>
         <span>状态与建议</span>
-        <span>额度窗口</span>
+        <span>额度与 Usage</span>
         <span>凭证最近刷新</span>
         <span>Access Token 过期</span>
-        <span>重置时间 / Usage</span>
+        <span>额度重置 / 状态</span>
         <span class="align-right">操作</span>
       </header>
 
@@ -385,6 +389,7 @@ function warningRemainText() {
 
           <div class="row-cell metric-cell">
             <strong>{{ quotaText(item) }}</strong>
+            <UsageInlineStats :success="item.usageSuccessCount" :failure="item.usageFailureCount" />
             <span>{{ quotaHintText(item) }}</span>
           </div>
 
@@ -400,10 +405,7 @@ function warningRemainText() {
 
           <div class="row-cell time-cell">
             <strong>{{ quotaResetText(item, false, " / ") }}</strong>
-            <div class="usage-stack">
-              <span>{{ item.requestStatusText }}</span>
-              <UsageInlineStats :success="item.usageSuccessCount" :failure="item.usageFailureCount" />
-            </div>
+            <span>{{ item.requestStatusText }}</span>
           </div>
 
           <div class="row-cell action-cell">
@@ -430,6 +432,13 @@ function warningRemainText() {
               :disabled="workbenchPending() || rowPending(item) || !item.authIndex || !item.accountId"
               :pending="props.consoleApp.isPending('row-refresh', item.key)"
               @click="props.consoleApp.refreshOne(item.key)"
+            />
+            <ActionIconButton
+              title="导出文件"
+              icon="export"
+              :disabled="workbenchPending() || rowPending(item) || !item.name || item.runtimeOnly"
+              :pending="props.consoleApp.isPending('row-export', item.key)"
+              @click="props.consoleApp.exportItemFile(item, { pendingType: 'row-export', pendingKey: item.key })"
             />
             <ActionIconButton
               :title="item.disabled ? '启用文件' : '停用文件'"

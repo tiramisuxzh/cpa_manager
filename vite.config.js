@@ -4,7 +4,7 @@ import vue from "@vitejs/plugin-vue";
 
 const require = createRequire(import.meta.url);
 const { readConfig, clientConfig, writeManagementConfig, writeIntegrationConfig } = require("./server/config");
-const { readAuthFileDetail, refreshAuthCredential, reviveAuthFile } = require("./server/revive");
+const { exportAuthFile, readAuthFileDetail, refreshAuthCredential, reviveAuthFile, syncAuthFiles } = require("./server/revive");
 
 function readRequestBody(req) {
   return new Promise(function (resolve, reject) {
@@ -114,6 +114,32 @@ function localAppConfigPlugin() {
         }
       });
 
+      server.middlewares.use("/api/export-auth-file", async function (req, res, next) {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        try {
+          const body = await readRequestBody(req);
+          const management = body && body.management;
+          const item = body && body.item;
+
+          if (!body || !management || typeof management !== "object" || Array.isArray(management) || !item || typeof item !== "object" || Array.isArray(item)) {
+            sendJson(res, 400, { error: "导出文件请求格式不正确" });
+            return;
+          }
+          if (!String(management.baseUrl || "").trim() || !String(management.key || "").trim() || !String(item.name || "").trim()) {
+            sendJson(res, 400, { error: "缺少管理地址、Management Key 或文件名" });
+            return;
+          }
+
+          sendJson(res, 200, await exportAuthFile(body));
+        } catch (error) {
+          sendJson(res, 500, { error: error && error.message ? error.message : "导出文件失败" });
+        }
+      });
+
       // 开发模式默认只起 Vite，不起本地 Express，因此复活接口也要在这里补齐，避免页面在 5173 下直接打到 404。
       server.middlewares.use("/api/revive-auth-file", async function (req, res, next) {
         if (req.method !== "POST") {
@@ -165,6 +191,46 @@ function localAppConfigPlugin() {
           sendJson(res, 200, await refreshAuthCredential(body));
         } catch (error) {
           sendJson(res, 500, { error: error && error.message ? error.message : "刷新凭证失败" });
+        }
+      });
+
+      // 文件同步接口在生产模式由 Express 提供，开发模式也需要补齐，否则前端在 Vite 下会收到空 404，界面上只会显示成 {}。
+      server.middlewares.use("/api/sync-auth-files", async function (req, res, next) {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        try {
+          const body = await readRequestBody(req);
+          const sourceManagement = body && body.sourceManagement;
+          const targetManagement = body && body.targetManagement;
+
+          if (
+            !body
+            || !sourceManagement
+            || typeof sourceManagement !== "object"
+            || Array.isArray(sourceManagement)
+            || !targetManagement
+            || typeof targetManagement !== "object"
+            || Array.isArray(targetManagement)
+          ) {
+            sendJson(res, 400, { error: "文件同步请求格式不正确" });
+            return;
+          }
+          if (
+            !String(sourceManagement.baseUrl || "").trim()
+            || !String(sourceManagement.key || "").trim()
+            || !String(targetManagement.baseUrl || "").trim()
+            || !String(targetManagement.key || "").trim()
+          ) {
+            sendJson(res, 400, { error: "缺少源端或目标端的管理地址、Management Key" });
+            return;
+          }
+
+          sendJson(res, 200, await syncAuthFiles(body));
+        } catch (error) {
+          sendJson(res, 500, { error: error && error.message ? error.message : "文件同步失败" });
         }
       });
     }
