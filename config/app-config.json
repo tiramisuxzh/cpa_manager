@@ -1,7 +1,7 @@
 {
   "management": {
-    "baseUrl": "http://43.134.86.172:8317",
-    "key": "1qaz@WSX",
+    "baseUrl": "http://localhost:8317",
+    "key": "123456",
     "reviveProxyUrl": "http://127.0.0.1:7890",
     "syncTargetBaseUrl": "",
     "syncTargetKey": "",
@@ -18,7 +18,7 @@
   },
   "integrations": {
     "wenfxlOpenai": {
-      "url": "http://170.106.152.6:8000"
+      "url": "http://123213:8000"
     }
   },
   "remote": {
